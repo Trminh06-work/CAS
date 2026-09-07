@@ -1,0 +1,19 @@
+# Python 3.11.
+numpy==2.3.5
+scipy==1.16.3
+pandas==2.3.3
+
+# benchmark problems and the hypervolume indicator
+pymoo==0.6.2
+
+# Choquet integral / fuzzy measure fitting, used by choquetreg.py
+pyfmtools==5.3.9
+torch==2.9.1
+
+# plotting
+matplotlib==3.10.8
+seaborn==0.13.2
+plotly==6.9.0
+
+# to run pymoo_lab.ipynb
+ipykernel==7.1.0
