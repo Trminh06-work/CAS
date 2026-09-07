@@ -131,7 +131,7 @@ class BaseModel(ABC):
             # Step 2: Optimise subject to the learnt weight
             x = self.rng.random(self.PS_dim)                             # random intial point for solver
             minimize(self.F, x, args = (self.w,), method = self.solver,  # solve using scalarised F
-                     bounds = bounds, tol = self.tol)
+                     bounds = bounds, tol = self.tol, options={'maxiter': 50})
             # Filter out the non-dominated points obtained -> current PF and PS approximation
             self.filter_PF_PS()
 
