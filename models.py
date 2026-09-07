@@ -24,7 +24,7 @@ class BaseModel(ABC):
         self.rng = np.random.default_rng(random_state)
 
         self.num_func_eval: int = 0
-        self.y: np.ndarray  = np.empty(0)       # scalarised F values      - (n_eval,)
+        self.y: np.ndarray  = np.empty(0)       # will be set to vector of ones  - (n_eval,)
         self.PF: np.ndarray = None              # Pareto front - objective space - (n_eval, PF_dim)
         self.PS: np.ndarray = None              # Pareto set   - decision space  - (n_eval, PS_dim)
         self.w: np.ndarray = np.ones(self.PF_dim) / self.PF_dim if w0 is None else np.asarray(w0, dtype = float)       # weight vector for scalarisation
@@ -189,7 +189,7 @@ class ChoquetModel(BaseModel):
 
     def scalarise(self, F, w):
         # F: evaluated values of {self.problem.n_job} objectives in MOP -> x in Choquet integral
-        # w is the Choquet capacities -> already stoed in `self.choquet_reg.w_vec`
+        # w is the Choquet capacities -> already stoed in `self.choquet_reg.w_vec` -> unused herein
         return self.choquet_reg.choquet_value(torch.from_numpy(F))
 
 
