@@ -126,9 +126,9 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
     """
         Plot one view of a solved model, in the problem's own objective units.
 
-        The solver works on stored units (K - f, so that minimising maximises f); everything
-        here is mapped back through problem.true() first, so a maximisation problem is drawn as
-        a maximisation problem. Dominance is still decided on the stored values.
+        Axes are the problem's stored units - raw pymoo objectives, or the order-preserving
+        affine rescaling when problem.normalise is set. problem.true() maps them back to raw
+        units; dominance is identical either way, so the picture is the same shape.
 
         model                any BaseModel, after solve()
 
