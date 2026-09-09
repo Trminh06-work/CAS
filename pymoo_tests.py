@@ -164,7 +164,7 @@ class ZDT3(_ZDT):
 
     def pareto_set(self, n_points = 300):
         # x0 runs over the disconnected segments, every other coordinate at 0
-        f1 = self.true(self.pareto_front(n_points))[:, 0]
+        f1 = np.atleast_2d(self.inner.pareto_front())[:, 0]      # raw units; x0 == f1 on the front
         idx = np.linspace(0, len(f1) - 1, min(n_points, len(f1))).astype(int)
         X = np.zeros((len(idx), self.n_dim))
         X[:, 0] = f1[idx]
