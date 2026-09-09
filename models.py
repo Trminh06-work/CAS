@@ -162,7 +162,11 @@ class LinearModel(BaseModel):
     def learn_weight(self):
         # Adaptively learn the weights from the current Pareto front
         w, _ = nnls(self.PF, self.y)    # this solver gives solution s.t. w >= 0
-        return w
+
+        # argmin of w.F is scale–invariant for w >= 0
+        # as the F -> the pf (near the origin 0), the ||w|| diverges
+        n = np.linalg.norm(w)
+        return w / n if n > 0 else np.ones(self.PF_dim) / self.PF_dim
 
 
 # ===================================================================
