@@ -113,6 +113,7 @@ class BaseModel(ABC):
         # Step 0: Initialisation
         self.iteration = 0
         x0 = self.rng.random(self.PS_dim)
+        # self.F is -F_val -> minimise becomes maximise
         minimize(self.F, x0, args = (self.w,), method = self.solver, bounds = bounds, tol = self.tol)
         # Filter out the non-dominated points obtained -> current PF and PS approximation
         self.filter_PF_PS()
