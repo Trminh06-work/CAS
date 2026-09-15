@@ -135,7 +135,9 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
         kind:
             "objective"  every evaluation (obj_hist) with the non-dominated archive (PF) highlighted and the true front behind them
 
-            "learning"   a slider over the outer iterations showing only the non-dominated archive as it stood at that iteration
+            "learning"   a slider over the outer iterations showing only the non-dominated archive as it
+                         stood at that iteration - every one of its points is drawn, and the axes are
+                         refitted to them, so the axis numbers show how the archive rescales
 
             "true_pf"    the analytical front on its own
 
@@ -145,7 +147,9 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
 
         zoom                 frame the archive and the true front instead of
                              every evaluation, so the front is not squashed into a corner by the
-                             unconverged cloud; the points left outside are counted in the legend
+                             unconverged cloud; the points left outside are counted in the legend.
+                             "learning" never leaves a point off-frame: zoom refits the axes to each
+                             iteration, zoom = False holds one box that spans every iteration
 
         show                 render the figure before returning
     """
@@ -202,19 +206,52 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
         for it in iters:
             Q = stored_hist[steps <= it]                 # non_dominated() assumes minimisation
             fronts[int(it)] = to_true(Q[model.non_dominated(Q)])
-        seen = np.vstack(list(fronts.values()) + ([true] if true is not None and show_true else []))
-        lo, hi = (zlo, zhi) if zlo is not None else (seen.min(0), seen.max(0))
+
+        # the analytical front shares the frame when it is drawn, so convergence stays readable
+        ref = true if (true is not None and show_true and dim <= 3) else np.empty((0, dim))
+
+        def frame_box(it):
+            """
+                The axes for one iteration: every non-dominated point it holds, plus the analytical
+                front when that is drawn. Fitting the box to the points rather than clipping them is
+                what makes the rescaling visible - read it off the axis ticks as the slider moves.
+            """
+            Q = np.vstack([fronts[int(it)], ref]) if len(ref) else fronts[int(it)]
+            lo, hi = Q.min(0), Q.max(0)
+            # an archive of one point - or of that point and its finite-difference twins, which
+            # differ in the 7th digit - has no spread to frame, so fall back to its own magnitude
+            # instead of zooming the axes down onto floating-point noise
+            spread = np.maximum(np.abs(hi), 1.0)
+            pad = 0.05 * np.where(hi - lo > 1e-6 * spread, hi - lo, spread)
+            return lo - pad, hi + pad
+
+        # zoom: refit the axes to each iteration. zoom = False: one box that spans them all.
+        # Either way no point is ever left outside the frame.
+        boxes = {int(it): frame_box(it) for it in iters}
+        if not zoom:
+            lo = np.min([b[0] for b in boxes.values()], 0)
+            hi = np.max([b[1] for b in boxes.values()], 0)
+            boxes = {int(it): (lo, hi) for it in iters}
+
+
+        def axes_layout(it):
+            """The axis ranges of one frame - they travel with the frame so the slider rescales them."""
+            lo, hi = boxes[int(it)]
+            if dim == 3:
+                return go.Layout(scene = dict(zip(("xaxis", "yaxis", "zaxis"),
+                                                  (dict(range = [lo[k], hi[k]]) for k in range(3)))))
+            if dim == 2:
+                return go.Layout(xaxis = dict(range = [lo[0], hi[0]]), yaxis = dict(range = [lo[1], hi[1]]))
+            return go.Layout(yaxis = dict(range = [lo.min(), hi.max()]))    # parallel coordinates
 
         def traces(it):
             w = W[np.argmax(all_it == it)]               # weight learnt at iteration it
-            Q = fronts[int(it)]
+            Q, (lo, hi) = fronts[int(it)], boxes[int(it)]
             xyz = (dict(zip("xyz", Q.T)) if dim <= 3 else
                    dict(x = np.tile(np.arange(dim), len(Q)), y = Q.ravel()))
-            # the count rides in the legend label, so it follows the slider
-            off = 0 if zlo is None else int(np.sum(~np.all((Q >= zlo) & (Q <= zhi), 1)))
+            # every point of the archive is drawn; the count rides in the legend label, so it follows the slider
             out = [(go.Scatter3d if dim == 3 else go.Scatter)(
-                **xyz, mode = "markers",
-                name = f"non-dominated ({len(Q)}" + (f", {off} off-frame)" if off else ")"),
+                **xyz, mode = "markers", name = f"non-dominated ({len(Q)})",
                 marker = dict(size = 5.5 if dim == 2 else 2, color = "royalblue"))]
 
             # the level sets need nothing model-specific - just scalarise() on a grid
@@ -246,22 +283,15 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
         for trace in traces(iters[-1]):
             fig.add_trace(trace)
 
-        # pin the axes to the same box whatever traces are present, so plot_scalarisation only
-        # adds the level sets instead of also re-framing the plot: the contour grid spans every
-        # frame, the points span one, and autorange would otherwise disagree between the two
-        rpad = 0.03 * np.where(hi > lo, hi - lo, 1.0)
-        rlo, rhi = (lo, hi) if zlo is not None else (lo - rpad, hi + rpad)
-
+        # the axis titles are fixed; the ranges come from each frame's own layout, so the contour
+        # grid and the points are always framed by the same box and autorange never re-frames it
         if dim == 3:
-            fig.update_scenes(**dict(zip(("xaxis_title", "yaxis_title", "zaxis_title"), plain)),
-                              **{f"{a}axis_range": [rlo[k], rhi[k]] for k, a in enumerate("xyz")})
+            fig.update_scenes(**dict(zip(("xaxis_title", "yaxis_title", "zaxis_title"), plain)))
         elif dim == 2:
-            fig.update_layout(xaxis_title = plain[0], yaxis_title = plain[1],
-                              xaxis_range = [rlo[0], rhi[0]], yaxis_range = [rlo[1], rhi[1]])
-        else:                                    # parallel coordinates: x is the coordinate index
-            fig.update_layout(yaxis_range = [rlo.min(), rhi.max()])
+            fig.update_layout(xaxis_title = plain[0], yaxis_title = plain[1])
+        fig.update_layout(axes_layout(iters[-1]))        # the iteration the slider opens on
 
-        fig.frames = [go.Frame(name = str(it), data = traces(it),
+        fig.frames = [go.Frame(name = str(it), data = traces(it), layout = axes_layout(it),
                                traces = list(range(base, len(fig.data)))) for it in iters]
         fig.update_layout(
             height = 600, width = 700, showlegend = True,

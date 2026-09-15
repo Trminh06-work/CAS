@@ -5,13 +5,6 @@ from pymoo.core.problem import ElementwiseProblem
 
 
 class Problem(ElementwiseProblem):
-    """
-        A pymoo benchmark, reported in its own units - objectives and Pareto front come straight
-        from pymoo with no rescaling. All of these are MINIMISATION problems.
-
-        The class exists only to give models.py what it expects: the n_dim alias for pymoo's
-        n_var, a per-point evaluate(), and an analytical pareto_set() where one is known.
-    """
     def __init__(self, name: str = None, **kwargs):
         if name is None:
             raise ValueError("The problem's name is not specified")
