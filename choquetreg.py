@@ -16,6 +16,11 @@ def estimate_a_lower_tail(X, y, quantile=0.2, eps=1e-8):
     then estimate local sensitivity dy/dx_i there via simple linear fit.
     """
     N, d = X.shape
+    # I added this line, as I saw it's missing in your script
+    # Like some weeks before, we came up with this solution to overcome the issues
+    # But it seems to raise another error
+    if N <= 5:
+        return torch.ones(d)
     a_est = torch.zeros(d)
 
     for i in range(d):
@@ -176,7 +181,7 @@ def solve_lp(Xy, p):
         }
     else:
         return {'success': False, 'message': res.message}
-        
+
 def fit(Xy, p):
     """
     Xy : torch tensor (K, n+1)
@@ -188,15 +193,19 @@ def fit(Xy, p):
         return result['m']
     else:
         print(f"LP failed: {result['message']}")
-        return None        
+        return None
 
+def Choquet2add(n,x,v):
+    t=0
+    for i in range(n):
+        t+=v[i]*x[i]
+    k=n
+    for i in range(n):
+        for j in range(i+1,n):
+            t+=min(x[i],x[j]) * v[k]
+            k+=1
+    return t 
 
-"""
-CHANGES:
-
-    - I added `env` and `method` to your original class
-
-"""
 class ChoquetReg:
     def __init__(self, method, env):
         self.dim=0
@@ -261,7 +270,7 @@ class ChoquetReg:
             case 1:
                 return self.dim* self.choquet_scaled(xt) + self.b_int
             case 2:
-                return self.dim*fm.Choquet2addMob(xt, self.v, self.dim) + self.b_int
+                return self.dim*Choquet2add(self.dim,xt,self.v)+ self.b_int # self.dim*fm.Choquet2addMob(xt, self.v, self.dim) + self.b_int
             case 3:
                 return self.dim*fm.ChoquetKinter(xt, self.v, self.kint, self.env) + self.b_int
             case 4:

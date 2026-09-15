@@ -193,10 +193,7 @@ class ChoquetModel(BaseModel):
         self.choquet_reg.dim = self.problem.n_obj
         self.choquet_reg.b_int = 0.0
         n = self.problem.n_obj
-        if method == 2: # Choquet2addMob: 2-additive Möbius, n singletons then n(n-1)/2 pairs
-            self.choquet_reg.v = np.array([1.0 / n] * n + [0.0] * (n * (n - 1) // 2))
-        else:  # fm.Choquet: standard 2**n form
-            self.choquet_reg.v = np.array([bin(i).count('1') / n for i in range(2 ** n)], dtype = 'float64')
+        self.choquet_reg.v = np.array([bin(i).count('1') / n for i in range(2 ** n)], dtype = 'float64')    # This raises error for some configurations of DTLZ2
 
 
 
