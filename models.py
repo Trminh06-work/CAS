@@ -189,6 +189,12 @@ class ChoquetModel(BaseModel):
         self.env = fm.fm_init(self.problem.n_obj)
         self.method = method
         self.choquet_reg = ChoquetReg(method, self.env)
+        self.choquet_reg.w_vec = torch.as_tensor(np.asarray(self.w, dtype = float))
+        self.choquet_reg.dim = self.problem.n_obj
+        self.choquet_reg.b_int = 0.0
+        self.choquet_reg.v  = np.array([bin(i).count('1') / self.problem.n_obj for i in range(2 ** self.problem.n_obj)],
+                              dtype = 'float64')
+
 
 
     def scalarise(self, F, w):
