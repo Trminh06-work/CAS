@@ -8,6 +8,7 @@ venv/
 # Jupyter
 .ipynb_checkpoints/
 choquet_playground/
+ablation_*/
 
 # macOS
 .DS_Store
