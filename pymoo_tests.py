@@ -67,6 +67,17 @@ class ZDT3(Problem):
         return X
 
 
+class ZDT6(Problem):
+    def __init__(self, n_dim = 30):
+        super().__init__("zdt6", n_var = n_dim)
+
+    def pareto_set(self, n_points=300):
+        # every variable except x0 at 0 so that g = 1; every x0 then lies on f2 = 1 - f1**2
+        X = np.zeros((n_points, self.n_dim))
+        X[:, 0] = np.linspace(0.0, 1.0, n_points)
+        return X
+
+
 
 class DTLZ1(Problem):
     def __init__(self, n_dim = 7, n_obj = 3):
