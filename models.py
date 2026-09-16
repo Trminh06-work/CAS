@@ -5,7 +5,6 @@ from pymoo_tests import Problem
 
 import pyfmtools as fm
 from choquetreg import ChoquetReg
-import torch
 import time
 
 class BaseModel(ABC):
@@ -188,12 +187,14 @@ class ChoquetModel(BaseModel):
         # Init environment and Choquet aggregator
         self.env = fm.fm_init(self.problem.n_obj)
         self.method = method
-        self.choquet_reg = ChoquetReg(method, self.env)
-        self.choquet_reg.w_vec = torch.as_tensor(np.asarray(self.w, dtype = float))
+        self.choquet_reg = ChoquetReg(self.env)
+        self.choquet_reg.w_vec = np.asarray(self.w, dtype = float)
         self.choquet_reg.dim = self.problem.n_obj
+        self.choquet_reg.idx_i, self.choquet_reg.idx_j = self.choquet_reg.make_pair_indices(self.choquet_reg.dim)
+        self.method=method
         self.choquet_reg.b_int = 0.0
-        n = self.problem.n_obj
-        self.choquet_reg.v = np.array([bin(i).count('1') / n for i in range(2 ** n)], dtype = 'float64')    # This raises error for some configurations of DTLZ2
+        # n = self.problem.n_obj
+        # self.choquet_reg.v = np.array([bin(i).count('1') / n for i in range(2 ** n)], dtype = 'float64')    # This raises error for some configurations of DTLZ2
 
 
 
@@ -201,16 +202,19 @@ class ChoquetModel(BaseModel):
     def scalarise(self, F, w):
         # F: evaluated values of {self.problem.n_job} objectives in MOP -> x in Choquet integral
         # w is the Choquet capacities -> already stoed in `self.choquet_reg.w_vec` -> unused herein
-        return self.choquet_reg.choquet_value(torch.from_numpy(F))
+        if self.choquet_reg.method == -1:
+            return np.dot(F, w)
+        else:
+            return self.choquet_reg.choquet_value(F)
 
 
     def learn_weight(self):
         # Learn the new Choquet capacities
         w = self.choquet_reg.fit_choquet(
-            torch.from_numpy(self.PF), torch.from_numpy(self.y),
+            self.PF, self.y,
             use_intercept = False, kadd = 2, method = self.method
         )
-        return w.numpy()
+        return w
 
 
 # ===================================================================
