@@ -80,7 +80,7 @@ class ZDT6(Problem):
 
 
 class DTLZ1(Problem):
-    def __init__(self, n_dim = 7, n_obj = 3):
+    def __init__(self, n_dim = 10, n_obj = 3):
         super().__init__("dtlz1", n_var = n_dim, n_obj = n_obj)
 
 
@@ -94,7 +94,7 @@ class DTLZ1(Problem):
 
 
 class DTLZ2(Problem):
-    def __init__(self, n_dim = 12, n_obj = 3):
+    def __init__(self, n_dim = 10, n_obj = 3):
         super().__init__("dtlz2", n_var = n_dim, n_obj = n_obj)
 
 

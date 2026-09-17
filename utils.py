@@ -324,9 +324,12 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
     fig = plt.figure(figsize = (8, 7))
     ax = fig.add_subplot(111, projection = "3d") if dim == 3 else fig.add_subplot(111)
     mag = 2 if dim == 2 else 1          # a flat plot carries larger markers than a 3-D scene
+    # if dim == 3:                      # f1 to the right, f2 to the left, both meeting at their max
+    #     ax.view_init(elev = 22, azim = 45)
 
     if true is not None and (show_true or only_true):
         draw(true, lines = True, color = "0.6", s = 10 * mag, lw = 0.6, label = "true PF")
+        # draw(true, lines = True, color = "C0", s = 10 * mag, lw = 0.6, label = "true PF") # to plot the true PF
     if not only_true:
         off = 0 if zlo is None else int(np.sum(~np.all((hist >= zlo) & (hist <= zhi), 1)))
         draw(hist, color = "C0", s = 5 * mag, alpha = 0.35, lw = 0.5,
