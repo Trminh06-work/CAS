@@ -31,7 +31,7 @@ class BaseModel(ABC):
         self.w_hist: np.ndarray = None          # weight used at each evaluation - (n_eval, PF_dim)
         self.obj_hist: np.ndarray = None        # the full history of the OBJECTIVER vectors found
         self.dec_hist: np.ndarray = None        # the full history of the DECISION vectors found
-        self.n_filtered: int = 0                # evaluations already folded into the archive
+        # self.n_filtered: int = 0                # evaluations already folded into the archive
 
         self.iter_hist: np.ndarray = np.empty(0, dtype = int)   # iteration index of each evaluation
         self.iteration: int = 0                 # current outer iteration
@@ -107,19 +107,11 @@ class BaseModel(ABC):
 
     def filter_PF_PS(self):
         """
-            Fold the evaluations made since the last call into the non-dominated archive.
+            Fold the evaluations made from every evaluation made so far.
         """
-        # Avoid looping again the whole history to filter the PF, PS
-        obj, dec = self.obj_hist[self.n_filtered:], self.dec_hist[self.n_filtered:]
-        self.n_filtered = len(self.obj_hist)
-
-        # Consider the prior PF, PS -> possibly discard some in the current iteration
-        if self.PF is not None:
-            obj, dec = np.vstack([self.PF, obj]), np.vstack([self.PS, dec])
-
         # Follow the Pareto optimality definition
-        keep = self.non_dominated(obj)
-        self.PF, self.PS = obj[keep], dec[keep]
+        keep = self.non_dominated(self.obj_hist)
+        self.PF, self.PS = self.obj_hist[keep], self.dec_hist[keep]
 
 
     def solve(self):
