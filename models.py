@@ -71,10 +71,16 @@ class BaseModel(ABC):
         self.wallclock_time = 0
         return F_val
 
+
     @staticmethod
-    def non_dominated(obj, kind: str = "eps"):
+    def non_dominated(obj, kind: str = "eps", eps: float = 1e-5):
         """
             Boolean mask of the non-dominated rows of obj (minimisation).
+
+            kind:
+                "strongly"  the exact Pareto front
+                "eps"       an eps-accurate Pareto front
+                "weakly"    the weakly Pareto optimal front
         """
         keep, front = np.zeros(len(obj), bool), np.empty((0, obj.shape[1]))
 
@@ -85,14 +91,11 @@ class BaseModel(ABC):
                 for i in np.lexsort(obj.T[::-1]):
                     if not np.any(np.all(front <= obj[i], 1)):
                         keep[i], front = True, np.vstack([front, obj[i]])
-                return keep
             case "eps":
-                # eps > 0 breaks the lexicographic argument, so compare against all rows
-                # eps = 0.000001 * (obj.max(0) - obj.min(0))
-                eps = 1e-10
-                for i in range(len(obj)):
-                    front = np.delete(obj, i, 0)
-                    keep[i] = not np.any(np.all(front <= obj[i] + eps, 1))
+                # ensure strongly Pareto optimal
+                for i in np.flatnonzero(BaseModel.non_dominated(obj, "strongly")):
+                    if not np.any(np.all(front <= obj[i] + eps, 1)):    # tolerate eps
+                        keep[i], front = True, np.vstack([front, obj[i]])
             case "weakly":
                 for i in range(len(obj)):
                     front = np.delete(obj, i, 0)
