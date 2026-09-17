@@ -34,7 +34,7 @@ class BaseModel(ABC):
         self.n_filtered: int = 0                # evaluations already folded into the archive
 
         self.iter_hist: np.ndarray = np.empty(0, dtype = int)   # iteration index of each evaluation
-        self.iteration: int = 0                 # current outer (active-learning) iteration
+        self.iteration: int = 0                 # current outer iteration
 
         # Termination criteria
         self.max_iter: int = max_iter
@@ -71,18 +71,34 @@ class BaseModel(ABC):
         self.wallclock_time = 0
         return F_val
 
-
     @staticmethod
-    def non_dominated(obj):
+    def non_dominated(obj, kind: str = "eps"):
         """
             Boolean mask of the non-dominated rows of obj (minimisation).
         """
         keep, front = np.zeros(len(obj), bool), np.empty((0, obj.shape[1]))
 
-        # in lexicographic order a point can only be dominated by one before it
-        for i in np.lexsort(obj.T[::-1]):
-            if not np.any(np.all(front <= obj[i], 1)):
-                keep[i], front = True, np.vstack([front, obj[i]])
+        match kind:
+            case "strongly":
+                # in lexicographic order a point can only be dominated by one before it
+                # the lexsort here is to speed-up the filtering
+                for i in np.lexsort(obj.T[::-1]):
+                    if not np.any(np.all(front <= obj[i], 1)):
+                        keep[i], front = True, np.vstack([front, obj[i]])
+                return keep
+            case "eps":
+                # eps > 0 breaks the lexicographic argument, so compare against all rows
+                # eps = 0.000001 * (obj.max(0) - obj.min(0))
+                eps = 1e-10
+                for i in range(len(obj)):
+                    front = np.delete(obj, i, 0)
+                    keep[i] = not np.any(np.all(front <= obj[i] + eps, 1))
+            case "weakly":
+                for i in range(len(obj)):
+                    front = np.delete(obj, i, 0)
+                    keep[i] = not np.any(np.all(front < obj[i], 1))
+            case _:
+                raise ValueError("Unknown Pareto optimality kind")
         return keep
 
 
@@ -191,7 +207,7 @@ class ChoquetModel(BaseModel):
         self.choquet_reg.w_vec = np.asarray(self.w, dtype = float)
         self.choquet_reg.dim = self.problem.n_obj
         self.choquet_reg.idx_i, self.choquet_reg.idx_j = self.choquet_reg.make_pair_indices(self.choquet_reg.dim)
-        self.method=method
+        self.method = method
         self.choquet_reg.b_int = 0.0
         # n = self.problem.n_obj
         # self.choquet_reg.v = np.array([bin(i).count('1') / n for i in range(2 ** n)], dtype = 'float64')    # This raises error for some configurations of DTLZ2
@@ -212,7 +228,7 @@ class ChoquetModel(BaseModel):
         # Learn the new Choquet capacities
         w = self.choquet_reg.fit_choquet(
             self.PF, self.y,
-            use_intercept = False, kadd = 2, method = self.method
+            use_intercept = False, kadd = 2, method = self.method, enforceone = True
         )
         return w
 

@@ -24,7 +24,7 @@ def estimate_a_lower_tail(X, y, quantile=0.2, eps=1e-8):
         thresh = np.quantile(X[:, i], quantile)
         mask = X[:, i] <= thresh
         if mask.sum() < 5:
-            a_est[i] = 1.0 / (X[:, i].std(ddof=1) + eps)     # ddof=1: the sample std, as in the original version
+            a_est[i] = 1.0 / (X[:, i].std(ddof=1) + eps)   # ddof=1: the sample std, as in the original version
             continue
 
         xi = X[mask, i]
@@ -42,7 +42,7 @@ def estimate_a_lower_tail(X, y, quantile=0.2, eps=1e-8):
 
 
 
-def solve_lp(Xy, p):
+def solve_lp(Xy, p, enforceone=True):
     """
     Xy : array (K, n+1) where
          Xy[:, :n] = X  (features)
@@ -107,13 +107,14 @@ def solve_lp(Xy, p):
         A_eq_rows.append(row)
         b_eq_rows.append(-y[k])
 
-    # 2) sum_i m_i + sum_{i<j} (m+_ij - m-_ij) = 1
-    row = np.zeros(N)
-    row[idx_m]  =  1.0
-    row[idx_mp] =  1.0
-    row[idx_mm] = -1.0
-    A_eq_rows.append(row)
-    b_eq_rows.append(1.0)
+    if enforceone:
+        # 2) sum_i m_i + sum_{i<j} (m+_ij - m-_ij) = 1
+        row = np.zeros(N)
+        row[idx_m]  =  1.0
+        row[idx_mp] =  1.0
+        row[idx_mm] = -1.0
+        A_eq_rows.append(row)
+        b_eq_rows.append(1.0)
 
     A_eq = np.array(A_eq_rows)
     b_eq = np.array(b_eq_rows)
@@ -178,17 +179,40 @@ def solve_lp(Xy, p):
     else:
         return {'success': False, 'message': res.message}
 
-def fit(Xy, p):
+
+    # reconstruct m array: singletons then pairs
+    # m_singletons = res.x[idx_m]
+    # m_pairs      = res.x[idx_mp] - res.x[idx_mm]  # mij = m+ - m-
+
+    # # combined m vector: [m_1..m_n, m_12, m_13, ...]
+    # m_all = np.concatenate([m_singletons, m_pairs])
+
+    # return {
+    #     'success':      True,
+    #     'obj':          res.fun,
+    #     't+':           res.x[idx_tp],
+    #     't-':           res.x[idx_tm],
+    #     'm':            m_all,        # singletons then pairs
+    #     'm_singletons': m_singletons,
+    #     'm_pairs':      dict(zip(pairs, m_pairs)),
+    #     'pairs':        pairs
+    # }
+
+
+def fit(Xy, p, enforceone=True):
     """
     Xy : array (K, n+1)
     p  : scalar penalty
     returns: m as a numpy array (n + C(n,2),) or None if failed
     """
-    result = solve_lp(Xy, p)
+    result = solve_lp(Xy, p, enforceone)
     if result['success']:
         return result['m']
     else:
+        #here you can go back and retry
         print(f"LP failed: {result['message']}")
+        # print("Retry and ignore the failure message from LP solver")
+        # return solve_lp(Xy, p, enforceone)["m"]
         return None
 
 def Choquet2add(n,x,v):
@@ -206,7 +230,6 @@ class ChoquetReg:
     def __init__(self, env):
         self.dim=0
         self.N=0
-        self.idx_i, self.idx_j=0,0
         self.method=-1
         self.env=env
 
@@ -233,8 +256,9 @@ class ChoquetReg:
             X_aug = X
 
     # Solve normal equations via least squares (numerically stable)
-        solution = np.linalg.lstsq(X_aug, y, rcond=None)[0].reshape(-1)   # (d[+1],)
 
+        #> No `solution` member in output of np.linalg.lstsq - it returns a tuple
+        solution = np.linalg.lstsq(X_aug, y, rcond=None)[0].reshape(-1)   # (d[+1],)
         if use_intercept:
             w, b = solution[:-1], float(solution[-1])
             return w, b
@@ -256,15 +280,6 @@ class ChoquetReg:
         idx_j = np.asarray([j for i,j in pairs], dtype=np.intp)
         return idx_i, idx_j
 
-    # def Choquet2add(self,n,x,v):
-    #     # the pair indices depend only on n, so build them on first use (and again if n changes)
-    #     if np.ndim(self.idx_i) == 0 or len(self.idx_i) != n * (n - 1) // 2:
-    #         self.idx_i, self.idx_j = self.make_pair_indices(n)
-    #     singleton = v[:n] @ x
-    #     mins      = np.minimum(x[self.idx_i], x[self.idx_j])
-    #     pairs     = v[n:] @ mins
-    #     return singleton + pairs
-
     def Choquet2add(self,n,x,v):
         x = np.asarray(x, dtype=float)
         v = np.asarray(v, dtype=float)
@@ -272,11 +287,22 @@ class ChoquetReg:
         t = np.dot(v[:n], x)
             # Pair part: build index arrays for i < j
         #    i_idx, j_idx = np.triu_indices(n, k=1)
-        pair_values = np.minimum(x[self.idx_i], x[self.idx_j])
+        pair_values = np.minimum(x[self.i_idx], x[self.j_idx])
         pair_mobius = v[n:]
         t += np.dot(pair_values, pair_mobius)
         return t
 
+    def Choquet2add_batch(self, n, X, v):
+        """
+        X : (batch, n) array
+        v : (n + C(n,2),) array
+        returns: (batch,) array
+        """
+        # print(f"X.shape = {X.shape} and v.shape = {v.shape}")
+        singletons = X @ v[:n]                              # (batch,)
+        mins       = np.minimum(X[:, self.idx_i], X[:, self.idx_j])  # (batch, P)
+        pairs      = mins @ v[n:]                           # (batch,)
+        return singletons + pairs
 
     def choquet_scaled(self,x):
         maxx=np.max(x)
@@ -287,23 +313,29 @@ class ChoquetReg:
         if self.dim==0:
             return 0
         xt=self.transform_features(x,self.w_vec)
-        xt = np.asarray(xt, dtype=np.float64)
-        self.v = np.asarray(self.v, dtype=np.float64)
+        xtnp=np.asarray(xt, dtype=np.float64)
         #print(xt)
         match self.method:
             case 0:
                 #print(fm.ChoquetMob(xt, self.mob, self.env))
-                return self.dim * fm.Choquet(xt, self.v, self.env) + self.b_int
+                return self.dim * fm.Choquet(xtnp, self.v, self.env) + self.b_int
             case 1:
-                return self.dim* self.choquet_scaled(xt) + self.b_int
+                return self.dim* self.choquet_scaled(xtnp) + self.b_int
             case 2:
-                return self.dim*self.Choquet2add(self.dim,xt,self.v)+ self.b_int # self.dim*fm.Choquet2addMob(xt, self.v, self.dim) + self.b_int
+                return self.dim*self.Choquet2add(self.dim,xtnp,self.v)+ self.b_int # self.dim*fm.Choquet2addMob(xt, self.v, self.dim) + self.b_int
             case 3:
-                return self.dim*fm.ChoquetKinter(xt, self.v, self.kint, self.env) + self.b_int
+                return self.dim*fm.ChoquetKinter(xtnp, self.v, self.kint, self.env) + self.b_int
             case 4:
-                return self.dim*fm.OWA(xt, self.v, self.env) + self.b_int
+                return self.dim*fm.OWA(xtnp, self.v, self.env) + self.b_int
 
     def choquet_value_t(self, x):
+
+        #here for method=2 I can use the whole array at once
+        if self.method==2:
+            xt=self.transform_features(np.asarray(x, dtype=np.float64),self.w_vec)
+            # print(f"xt = \n {xt} \n v = \n {self.v}")
+            return self.dim* self.Choquet2add_batch(self.dim,xt,self.v)+ self.b_int
+
         y=[]
         for xi in x:
             z=self.choquet_value(xi)
@@ -311,7 +343,7 @@ class ChoquetReg:
         return np.asarray(y, dtype=np.float64)
 
 
-    def fit_choquet_inner(self, X, y, use_intercept=True, kadd=2, method=0):
+    def fit_choquet_inner(self, X, y, use_intercept=True, kadd=2, method=0, enforceone=True):
 
         #self.w_vec=1./(self.w_vec*self.dim)
         X_transformed = self.transform_features(np.asarray(X, dtype=np.float64), self.w_vec)
@@ -329,8 +361,7 @@ class ChoquetReg:
                 self.v= fm.FuzzyMeasureFitMob(self.N, kadd, self.env, X_with_target)
                 self.mob=fm.Mobius(self.v, self.env)
             case 2: #2 additive
-                self.v=fit(X_with_target, 1.0/self.dim) # fm.FuzzyMeasureFit2Additive(self.N, self.dim, 0, None,  None, 0, None, X_with_target)
-                # self.idx_i, self.idx_j=self.make_pair_indices(self.dim)
+                self.v=fit(X_with_target, 1.0/self.dim,enforceone=enforceone) # fm.FuzzyMeasureFit2Additive(self.N, self.dim, 0, None,  None, 0, None, X_with_target)
             case 3:
                 self.v=fm.FuzzyMeasureFitLPKinteractiveAutoK(self.N, kadd, self.env, 0.3, 100, X_with_target)
                 self.kint=kadd
@@ -342,18 +373,23 @@ class ChoquetReg:
                 self.v=None
                 raise ValueError(f"Unknown method: {self.method}")
 
-    def fit_choquet(self, X, y, use_intercept=True, kadd=2, method=0):
+    def fit_choquet(self, X, y, use_intercept=True, kadd=2, method=0, enforceone=True):
         X, y = np.asarray(X, dtype=np.float64), np.asarray(y, dtype=np.float64)
         self.w_vec, self.b_int = self.fit_closed_form(X, y, use_intercept)
 
+        # print(self.w_vec)
         self.w_vec=estimate_a_lower_tail(X,y)
+        # print(self.w_vec)
         self.env=fm.fm_init(self.dim)
-        self.fit_choquet_inner( X, y, use_intercept, kadd, method)
+
+        self.i_idx, self.j_idx = np.triu_indices(self.dim, k=1)
+        self.idx_i, self.idx_j=self.make_pair_indices(self.dim)
+        self.fit_choquet_inner( X, y, use_intercept, kadd, method,enforceone=enforceone)
 
         #start iterations
         def objective(a_np):
             self.w_vec = np.asarray(a_np, dtype=np.float64)
-            self.fit_choquet_inner( X, y, use_intercept, kadd, method)
+            self.fit_choquet_inner( X, y, use_intercept, kadd, method,enforceone=enforceone)
             loss=np.sum((y-self.choquet_value_t(X))**2)
             return float(loss)
 
