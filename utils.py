@@ -54,7 +54,9 @@ def evaluate(models_arr: List[BaseModel]):
             dict(
                 hypervolume = hv(finite(m.PF)),
                 n_func_eval = m.num_func_eval,
-                n_non_dominated = len(finite(m.PF)), n_iter = int(m.iteration),
+                # n_non_dominated = len(finite(m.PF)), n_iter = int(m.iteration),
+                n_non_dominated = int(BaseModel.non_dominated(finite(m.obj_hist), "strongly").sum()),
+                n_iter = int(m.iteration),
                 wallclock_time = m.wallclock_time
             )
             for m in models_arr
