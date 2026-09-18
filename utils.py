@@ -128,10 +128,6 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
     """
         Plot one view of a solved model, in the problem's own objective units.
 
-        The solver works on stored units (K - f, so that minimising maximises f); everything
-        here is mapped back through problem.true() first, so a maximisation problem is drawn as
-        a maximisation problem. Dominance is still decided on the stored values.
-
         model                any BaseModel, after solve()
 
         kind:
