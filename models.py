@@ -27,6 +27,7 @@ class BaseModel(ABC):
         self.PF: np.ndarray = None              # Pareto front - objective space - (n_eval, PF_dim)
         self.PS: np.ndarray = None              # Pareto set   - decision space  - (n_eval, PS_dim)
         self.w: np.ndarray = np.ones(self.PF_dim) / self.PF_dim if w0 is None else np.asarray(w0, dtype = float)       # weight vector for scalarisation
+        self.nadir = self.find_nadir()          # nadir point from analytical PF
 
         self.w_hist: np.ndarray = None          # weight used at each evaluation - (n_eval, PF_dim)
         self.obj_hist: np.ndarray = None        # the full history of the OBJECTIVER vectors found
@@ -47,6 +48,21 @@ class BaseModel(ABC):
 
     def scalarise(self, F: np.ndarray, w: np.ndarray):
         raise NotImplementedError("The scalarisation method is not defined")
+
+
+    def find_nadir(self):
+        """This method finds the nadir point using the analytical PF"""
+        try:
+            true_pf = self.problem.pareto_front(n_points = 1000)
+        except TypeError: # some pymoo problems do not accept n_points
+            true_pf = self.problem.pareto_front()
+        except (AttributeError, NotImplementedError) as e:
+            raise RuntimeError("The analytical PF is not defined") from e
+
+        if true_pf is None or len(true_pf) == 0:
+            raise RuntimeError("The analytical PF is not defined")
+
+        return np.max(true_pf, axis = 0)
 
 
     def F(self, x, w):
@@ -73,13 +89,14 @@ class BaseModel(ABC):
 
 
     @staticmethod
-    def non_dominated(obj, kind: str = "eps", eps: float = 1e-5):
+    def non_dominated(obj, kind: str = "strongly", eps: float = 1e-5):
         """
             Boolean mask of the non-dominated rows of obj (minimisation).
 
             kind:
                 "strongly"  the exact Pareto front
-                "eps"       an eps-accurate Pareto front
+                "eps"       the eps-non-dominated points: x dominates y iff it beats y by more than eps in
+                            every objective - a superset of the front that grows with eps
                 "weakly"    the weakly Pareto optimal front
         """
         keep, front = np.zeros(len(obj), bool), np.empty((0, obj.shape[1]))
@@ -92,10 +109,13 @@ class BaseModel(ABC):
                     if not np.any(np.all(front <= obj[i], 1)):
                         keep[i], front = True, np.vstack([front, obj[i]])
             case "eps":
-                # ensure strongly Pareto optimal
-                for i in np.flatnonzero(BaseModel.non_dominated(obj, "strongly")):
-                    if not np.any(np.all(front <= obj[i] + eps, 1)):    # tolerate eps
-                        keep[i], front = True, np.vstack([front, obj[i]])
+                if np.any(np.asarray(eps) < 0):
+                    raise ValueError("eps must be non-negative")
+                front = obj[BaseModel.non_dominated(obj, "strongly")]
+                first = np.zeros(len(obj), bool)                    # one copy per objective vector, as "strongly" keeps
+                first[np.unique(obj, axis = 0, return_index = True)[1]] = True
+                for i in np.flatnonzero(first):
+                    keep[i] = not np.any(np.all(front < obj[i] - eps, 1))
             case "weakly":
                 for i in range(len(obj)):
                     front = np.delete(obj, i, 0)
@@ -208,21 +228,28 @@ class ChoquetModel(BaseModel):
         # self.choquet_reg.v = np.array([bin(i).count('1') / n for i in range(2 ** n)], dtype = 'float64')    # This raises error for some configurations of DTLZ2
 
 
+    def _utility(self, F):
+        """
+        This private method transforms the objectives into maximisation problem
+        to facilitat Choquet integral and capacity estimation
+        """
+        return - F + self.nadir
+
 
 
     def scalarise(self, F, w):
         # F: evaluated values of {self.problem.n_job} objectives in MOP -> x in Choquet integral
         # w is the Choquet capacities -> already stoed in `self.choquet_reg.w_vec` -> unused herein
         if self.choquet_reg.method == -1:
-            return np.dot(F, w)
+            return -np.dot(self._utility(F), w)
         else:
-            return self.choquet_reg.choquet_value(F)
+            return -self.choquet_reg.choquet_value(self._utility(F))
 
 
     def learn_weight(self):
         # Learn the new Choquet capacities
         w = self.choquet_reg.fit_choquet(
-            self.PF, self.y,
+            self._utility(self.PF) , self.y,
             use_intercept = False, kadd = 2, method = self.method, enforceone = True
         )
         return w
