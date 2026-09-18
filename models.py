@@ -27,7 +27,6 @@ class BaseModel(ABC):
         self.PF: np.ndarray = None              # Pareto front - objective space - (n_eval, PF_dim)
         self.PS: np.ndarray = None              # Pareto set   - decision space  - (n_eval, PS_dim)
         self.w: np.ndarray = np.ones(self.PF_dim) / self.PF_dim if w0 is None else np.asarray(w0, dtype = float)       # weight vector for scalarisation
-        self.nadir = self.find_nadir()          # nadir point from analytical PF
 
         self.w_hist: np.ndarray = None          # weight used at each evaluation - (n_eval, PF_dim)
         self.obj_hist: np.ndarray = None        # the full history of the OBJECTIVER vectors found
@@ -48,21 +47,6 @@ class BaseModel(ABC):
 
     def scalarise(self, F: np.ndarray, w: np.ndarray):
         raise NotImplementedError("The scalarisation method is not defined")
-
-
-    def find_nadir(self):
-        """This method finds the nadir point using the analytical PF"""
-        try:
-            true_pf = self.problem.pareto_front(n_points = 1000)
-        except TypeError: # some pymoo problems do not accept n_points
-            true_pf = self.problem.pareto_front()
-        except (AttributeError, NotImplementedError) as e:
-            raise RuntimeError("The analytical PF is not defined") from e
-
-        if true_pf is None or len(true_pf) == 0:
-            raise RuntimeError("The analytical PF is not defined")
-
-        return np.max(true_pf, axis = 0)
 
 
     def F(self, x, w):
@@ -217,7 +201,6 @@ class ChoquetModel(BaseModel):
 
         # Init environment and Choquet aggregator
         self.env = fm.fm_init(self.problem.n_obj)
-        self.method = method
         self.choquet_reg = ChoquetReg(self.env)
         self.choquet_reg.w_vec = np.asarray(self.w, dtype = float)
         self.choquet_reg.dim = self.problem.n_obj
@@ -233,7 +216,12 @@ class ChoquetModel(BaseModel):
         This private method transforms the objectives into maximisation problem
         to facilitat Choquet integral and capacity estimation
         """
-        return - F + self.nadir
+        # the ChoquetModel uses np.dot(w, F)
+        # _utility() is called after step 0
+        # -> self.PF is non-empty
+        def worst_point():
+            return np.max(self.PF, axis = 0)
+        return - F + worst_point()
 
 
 
@@ -241,7 +229,7 @@ class ChoquetModel(BaseModel):
         # F: evaluated values of {self.problem.n_job} objectives in MOP -> x in Choquet integral
         # w is the Choquet capacities -> already stoed in `self.choquet_reg.w_vec` -> unused herein
         if self.choquet_reg.method == -1:
-            return -np.dot(self._utility(F), w)
+            return -np.dot(F, w)
         else:
             return -self.choquet_reg.choquet_value(self._utility(F))
 
