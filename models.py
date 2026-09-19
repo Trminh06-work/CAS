@@ -68,7 +68,6 @@ class BaseModel(ABC):
 
         self.iter_hist = np.append(self.iter_hist, self.iteration)
         self.num_func_eval += 1     # Save total function evaluations
-        self.wallclock_time = 0
         return F_val
 
 
