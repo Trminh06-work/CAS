@@ -228,7 +228,7 @@ class ChoquetModel(BaseModel):
         # F: evaluated values of {self.problem.n_job} objectives in MOP -> x in Choquet integral
         # w is the Choquet capacities -> already stoed in `self.choquet_reg.w_vec` -> unused herein
         if self.choquet_reg.method == -1:
-            return -np.dot(F, w)
+            return np.dot(F, w)
         else:
             return -self.choquet_reg.choquet_value(self._utility(F))
 
