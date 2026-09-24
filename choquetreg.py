@@ -363,11 +363,10 @@ class ChoquetReg:
             case 2: #2 additive
                 self.v=fit(X_with_target, 1.0/self.dim,enforceone=enforceone) # fm.FuzzyMeasureFit2Additive(self.N, self.dim, 0, None,  None, 0, None, X_with_target)
             case 3:
-                self.v=fm.FuzzyMeasureFitLPKinteractiveAutoK(self.N, kadd, self.env, 0.3, 100, X_with_target)
+                self.v=fm.FuzzyMeasureFitLPKinteractiveFree(self.N, kadd, self.env, K = 1, R = 1, dataset = X_with_target)
                 self.kint=kadd
-
             case 4: #OWA
-                self.v,_= fm.fittingOWA(self.N, self.env, X_with_target)
+                self.v = fm.fittingOWA(self.N, self.env, X_with_target, ensureone=0 )
                 # print(self.v)
             case _:
                 self.v=None
