@@ -237,7 +237,7 @@ class ChoquetModel(BaseModel):
         # Learn the new Choquet capacities
         w = self.choquet_reg.fit_choquet(
             self._utility(self.PF) , self.y,
-            use_intercept = False, kadd = 2, method = self.method, enforceone = True
+            use_intercept = False, kadd = 2, method = self.method, enforceone = False
         )
         return w
 
