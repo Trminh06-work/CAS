@@ -8,6 +8,7 @@ venv/
 # Jupyter
 .ipynb_checkpoints/
 choquet_playground/
+numerical_example/
 ablation_*/
 
 # macOS
