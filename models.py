@@ -5,6 +5,7 @@ from pymoo_tests import Problem
 
 import pyfmtools as fm
 from choquetreg import ChoquetReg
+from slip_interpolant import SLipInterpolant
 import time
 
 class BaseModel(ABC):
@@ -248,3 +249,51 @@ class ChoquetModel(BaseModel):
 
 # ===================================================================
 
+
+# ===================================================================
+class LipschitzModel(BaseModel):
+    """
+        This model utilises the Lipschitz-continuity-based interpolant as a scalarising function
+        Therefore:
+            - scalarise(): predict() - Lipchitz-continuity-based interpolation
+            - learnt_weight(): fit() - Lipschitz constant estimation from non–dominated PF
+    """
+    def __init__(self,
+        type: str = "global", mon: np.array = None, num_k: int = 1,
+        a = None, b = None, w = None, **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.type = type
+        self.mon = mon
+        self.num_k = num_k
+        self.a = a
+        self.b = b
+        self.w = w
+
+
+    def scalarise(self, F, w):
+        # The `w` for scalarisation is the LipConst, which is inhenrently
+        # stored in `self.slip`
+        return self.slip.predict(F)
+
+
+    def learn_weight(self):
+        """
+            Return the Lipchitz constant estimated from non-dominated PF and 1
+        """
+        def worst_point():
+            # worst point of all current non-dominated solutions
+            # we shall refer to as reference nadir point
+            return np.max(self.PF, axis = 0)
+
+        # We must add the nadir point and 0 to the training data for SLip
+        # Otherwise the data is subject to a flat function -> yield nothing
+        X = np.concat([self.PF, worst_point()])
+        y = np.concat([self.y, 0])
+
+        self.slip = SLipInterpolant(
+            X, y, self.type, self.mon, self.num_k, self.a, self.b, self.w
+        )
+        self.slip.fit()
+
+        return self.slip.LipsConst
