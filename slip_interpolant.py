@@ -1,4 +1,3 @@
-from .base_model import BaseModel, ModelConfig
 import numpy as np
 from .liblipt import LibLipT
 import torch
@@ -12,13 +11,14 @@ def get_device():
     return torch.device("cpu")
 
 
-class SLipInterpolant(BaseModel):
+class SLipInterpolant():
     def __init__(self,
-        df_train: pd.DataFrame = None, df_test: pd.DataFrame = None, config: ModelConfig = None,
+        X: np.array = None, y: np.array = None,
         type: str = "global", mon: np.array = None, num_k: int = 1,
         a = None, b = None, w = None
     ):
-        super().__init__(df_train, df_test, config)
+        if X is None or y is None:
+            raise ValueError("No training data is given")
 
         if type not in ["global", "global_mon", "global_mix", "local", "local_mon", "local_mix", "smooth"]:
             raise ValueError("type must be `global`, `global_mon`, `global_mix`, `local`, `local_mon`, `local_mix` or `smooth`")
@@ -29,8 +29,8 @@ class SLipInterpolant(BaseModel):
             self.mon = mon
 
         # Construct the Slip interpolant using BaseModel's X/y split
-        self.dim = int(self.X_train.shape[1])
-        self.npts = int(self.X_train.shape[0])
+        self.dim = int(X.shape[1])
+        self.npts = int(X.shape[0])
         self.type = type
         self.num_k = num_k
 
@@ -38,19 +38,8 @@ class SLipInterpolant(BaseModel):
         self.b = np.zeros(self.dim) if b is None else b
         self.w = np.full(self.num_k, 1.0 / self.num_k) if w is None else w
 
-        # Convert to NumPy arrays -> flatten for compatible with the liblip codebase
-        self.X_train_np = np.ascontiguousarray(
-            self.X_train.to_numpy(dtype = np.float32, copy = False)
-        )
-        self.y_train_np = np.ascontiguousarray(
-            self.y_train.to_numpy(dtype = np.float32, copy = False)
-        )
-        self.X_test_np = np.ascontiguousarray(
-            self.X_test.to_numpy(dtype = np.float32, copy = False)
-        )
-
         self.sli = LibLipT(capacity = self.npts + 7, dim = self.dim, knn = self.num_k, device = get_device())
-        self.sli.add(self.X_train_np, self.y_train_np)
+        self.sli.add(X, y)
 
 
     def fit(self):
@@ -75,48 +64,48 @@ class SLipInterpolant(BaseModel):
             self.smoothened_LipConst = self.LipsConst / 2
 
 
-    def predict(self):
+    def predict(self, F: np.array):
         if self.type == "global":
             preds = self.sli.values(
-                Q = self.X_test_np, M = self.LipsConst, model = 0, k = self.num_k
+                Q = F, M = self.LipsConst, model = 0, k = self.num_k
             )
 
         if self.type == "global_mon":
             preds = self.sli.values(
-                Q = self.X_test_np, M = self.LipsConst, model = 1, k = self.num_k
+                Q = F, M = self.LipsConst, model = 1, k = self.num_k
             )
 
         if self.type == "global_mix":
             global_preds = self.sli.values(
-                Q = self.X_test_np, M = self.LipsConst, model = 0, k = self.num_k
+                Q = F, M = self.LipsConst, model = 0, k = self.num_k
             )
             global_mon_preds = self.sli.values(
-                Q = self.X_test_np, M = self.LipsConst, model = 1, k = self.num_k
+                Q = F, M = self.LipsConst, model = 1, k = self.num_k
             )
             preds = (global_preds + global_mon_preds) / 2
 
         if self.type == "local":
             preds = self.sli.values_local(
-                Q = self.X_test_np, model = 0, k = self.num_k
+                Q = F, model = 0, k = self.num_k
             )
 
         if self.type == "local_mon":
             preds = self.sli.values_local(
-                Q = self.X_test_np, model = 1, k = self.num_k
+                Q = F, model = 1, k = self.num_k
             )
 
         if self.type == "local_mix":
             local_preds = self.sli.values_local(
-                Q = self.X_test_np, model = 0, k = self.num_k
+                Q = F, model = 0, k = self.num_k
             )
             local_mon_preds = self.sli.values_local(
-                Q = self.X_test_np, model = 1, k = self.num_k
+                Q = F, model = 1, k = self.num_k
             )
             preds = (local_preds + local_mon_preds) / 2
 
         if self.type == "smooth":
             preds = self.sli.values(
-                Q = self.X_test_np, M = self.smoothened_LipConst, model = 1, k = self.num_k
+                Q = F, M = self.smoothened_LipConst, model = 1, k = self.num_k
             )
 
         return preds
