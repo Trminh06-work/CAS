@@ -49,6 +49,21 @@ class BaseModel(ABC):
         raise NotImplementedError("The scalarisation method is not defined")
 
 
+    def _utility(self, F):
+        """
+            Turn the objectives into a maximisation problem, so that higher is better and the archive's
+            own values are non-negative - what the Choquet integral and its capacity estimation expect.
+
+            Returns None before the first archive exists, i.e. during step 0.
+        """
+        if self.PF is None:
+            return None
+
+        def worst_point():
+            return np.max(self.PF, axis = 0)
+        return - F + worst_point()
+
+
     def F(self, x, w):
         # Ensure the current point is within the problem's feasible region
         # Assume the feasible region is box constraints
@@ -169,12 +184,15 @@ class LinearModel(BaseModel):
 
 
     def scalarise(self, F, w):
-        return np.dot(F, w)
+        # the same utility the Choquet model aggregates: -w.u = w.F - w.(worst point), so the minimiser
+        # is the plain weighted sum's, but the weights now mean what they mean in a capacity
+        utility = self._utility(F)
+        return np.dot(F, w) if utility is None else -np.dot(utility, w)
 
 
     def learn_weight(self):
-        # Adaptively learn the weights from the current Pareto front
-        w, _ = nnls(self.PF, self.y)    # this solver gives solution s.t. w >= 0
+        # Adaptively learn the weights from the current Pareto front, on the utilities the scalarisation
+        w, _ = nnls(self._utility(self.PF), self.y)    # this solver gives solution s.t. w >= 0
 
         # argmin of w.F is scale–invariant for w >= 0
         # as the F -> the pf (near the origin 0), the ||w|| diverges
@@ -210,20 +228,6 @@ class ChoquetModel(BaseModel):
         # self.choquet_reg.v = np.array([bin(i).count('1') / n for i in range(2 ** n)], dtype = 'float64')    # This raises error for some configurations of DTLZ2
 
 
-    def _utility(self, F):
-        """
-        This private method transforms the objectives into maximisation problem
-        to facilitat Choquet integral and capacity estimation
-        """
-        # the ChoquetModel uses np.dot(w, F)
-        # _utility() is called after step 0
-        # -> self.PF is non-empty
-        def worst_point():
-            return np.max(self.PF, axis = 0)
-        return - F + worst_point()
-
-
-
     def scalarise(self, F, w):
         # F: evaluated values of {self.problem.n_job} objectives in MOP -> x in Choquet integral
         # w is the Choquet capacities -> already stoed in `self.choquet_reg.w_vec` -> unused herein
@@ -243,3 +247,4 @@ class ChoquetModel(BaseModel):
 
 
 # ===================================================================
+
