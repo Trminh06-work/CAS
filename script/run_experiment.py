@@ -6,9 +6,10 @@
         python run_experiment.py --conf job.conf --index 7        run task 7 and write its result
 
     Each task writes results/<model>_<problem>_d<n_dim>_m<n_obj>_s<seed>.csv (one row, with a header)
-    and the archive it found as the matching .npz, so the sweep can be concatenated afterwards with
+    and the archive it found as the matching .npz. A task row carries IGD; the hypervolume needs the
+    reference point that the models of one seed share, so it is added afterwards by
 
-        python -c "import pandas as pd, glob; pd.concat(map(pd.read_csv, glob.glob('results/*.csv'))).to_csv('all.csv', index=False)"
+        python run_experiment.py --conf job.conf --aggregate      -> results/summary.csv
 
     A task that raises still writes its row, with status = the exception, so one failure does not
     leave a hole in the table.
@@ -63,7 +64,6 @@ def run(task, conf, results_dir):
     import models as model_module
     import pymoo_tests
     from pymoo.indicators.igd import IGD
-    from pymoo.indicators.hv import HV
 
     model_key, problem_name, n_dim, n_obj, seed = task
     max_iter = int(conf["max_iter"][0])
@@ -93,22 +93,25 @@ def run(task, conf, results_dir):
     row["n_func_eval"] = int(model.num_func_eval)
     row["n_iter"] = int(model.iteration)
 
-    row["archive"], row["igd"], row["hypervolume"] = 0, np.nan, np.nan
+    row["archive"], row["igd"] = 0, np.nan
     if model.PF is not None and len(model.PF):
         PF = np.atleast_2d(model.PF)
         PF = PF[np.all(np.isfinite(PF), 1)]
         row["archive"] = len(PF)
-        np.savez_compressed(os.path.join(results_dir, stem(task) + ".npz"), PF = PF, PS = model.PS)
+        # obj_hist too: utils.evaluate() takes its reference point from every evaluation made, not
+        # from the archive, and --aggregate needs the same rows to reproduce that across processes
+        hist = np.atleast_2d(model.obj_hist)
+        hist = hist[np.all(np.isfinite(hist), 1)]
+        np.savez_compressed(os.path.join(results_dir, stem(task) + ".npz"),
+                            PF = PF, PS = model.PS, obj_hist = hist)
         try:
-            # the reference point and the front come from the problem, not from the run, so these
-            # numbers compare across models and seeds
+            # the front comes from the problem, not from the run, so IGD compares across models and
+            # seeds; the hypervolume is added by --aggregate, which needs this seed's other models
             true = problem.pareto_front()
             row["igd"] = float(IGD(true)(PF))
-            row["hypervolume"] = float(HV(ref_point = 1.1 * true.max(0) + 0.1)(PF))
         except Exception as exc:
-            # pymoo cannot build a DTLZ front beyond 3 objectives without reference directions; the
-            # run itself is still fine, and --aggregate scores it against a reference taken from the
-            # archives of that configuration
+            # pymoo cannot build a DTLZ front beyond 3 objectives without reference directions, so
+            # those runs have no IGD; the run itself is fine and the hypervolume is unaffected
             row["status"] += f" (no analytical front: {type(exc).__name__})"
 
     return row
@@ -116,9 +119,15 @@ def run(task, conf, results_dir):
 
 def aggregate(results_dir):
     """
-        Collect the per-task rows and add a hypervolume every task can be compared on: for each
-        (problem, n_dim, n_obj) the reference point is the worst corner over every archive of that
-        configuration, so models and seeds share it even where no analytical front exists.
+        Collect the per-task rows and add the hypervolume column. It is defined for every task,
+        including the DTLZ runs past 3 objectives, whose only missing metric is then IGD.
+
+        The reference point is the one utils.evaluate() uses - the worst value per objective over
+        every evaluation made - pooled over the models of one (problem, n_dim, n_obj, seed), exactly
+        the comparison the notebook makes. One seed is one experiment: the three models share its
+        reference point, and the hypervolume of seed 1 is not on the same scale as that of seed 2,
+        so compare models within a seed and aggregate across seeds by rank or by mean of the
+        per-seed differences, not by averaging the raw numbers.
     """
     import glob
     from pymoo.indicators.hv import HV
@@ -129,23 +138,31 @@ def aggregate(results_dir):
         raise SystemExit(f"no per-task csv files in {results_dir}")
     table = pd.concat(rows, ignore_index = True)
 
-    archives = {}
+    archives, histories = {}, {}
     for _, r in table.iterrows():
         path = os.path.join(results_dir, f"{r.model}_{r.problem}_d{r.n_dim}_m{r.n_obj}_s{r.seed}.npz")
         if os.path.exists(path):
-            archives[(r.model, r.problem, r.n_dim, r.n_obj, r.seed)] = np.load(path)["PF"]
+            data = np.load(path)
+            key = (r.model, r.problem, r.n_dim, r.n_obj, r.seed)
+            archives[key] = data["PF"]
+            if "obj_hist" in data:
+                histories[key] = data["obj_hist"]
 
-    table["hv_shared"] = np.nan
-    for (problem, n_dim, n_obj), group in table.groupby(["problem", "n_dim", "n_obj"]):
-        pile = [archives[k] for k in archives if k[1:4] == (problem, n_dim, n_obj)]
-        if not pile:
+    table["hypervolume"] = np.nan
+    for (problem, n_dim, n_obj, seed), group in table.groupby(["problem", "n_dim", "n_obj", "seed"]):
+        keys = [k for k in archives if k[1:] == (problem, n_dim, n_obj, seed)]
+        if not keys:
             continue
-        ref = np.vstack(pile).max(0) * 1.1 + 0.1
+        # find_nadir() over the evaluations of this seed's models; an archive-only fallback for a run
+        # saved before obj_hist was kept, which only ever shrinks the box
+        ref = np.vstack([histories.get(k, archives[k]) for k in keys]).max(0)
         hv = HV(ref_point = ref)
+        table.loc[group.index, "hv_ref"] = " ".join(f"{v:.6g}" for v in ref)
+        table.loc[group.index, "hv_models"] = len(keys)     # how many models shared it - 3 when the seed is complete
         for i, r in group.iterrows():
-            PF = archives.get((r.model, problem, n_dim, n_obj, r.seed))
+            PF = archives.get((r.model, problem, n_dim, n_obj, seed))
             if PF is not None:
-                table.loc[i, "hv_shared"] = float(hv(PF))
+                table.loc[i, "hypervolume"] = float(hv(PF))
 
     out = os.path.join(results_dir, "summary.csv")
     table.to_csv(out, index = False)
@@ -165,7 +182,7 @@ def main():
     parser.add_argument("--count", action = "store_true", help = "print how many tasks there are")
     parser.add_argument("--list", action = "store_true", help = "print every task, one per line")
     parser.add_argument("--aggregate", action = "store_true",
-                        help = "after the sweep: merge the rows and add a shared-reference hypervolume")
+                        help = "after the sweep: merge the rows and add the per-seed hypervolume")
     args = parser.parse_args()
 
     conf = read_conf(args.conf)
@@ -194,7 +211,7 @@ def main():
     print(f"task {args.index}: {' '.join(str(part) for part in task)}", flush = True)
     row = run(task, conf, results_dir)
     pd.DataFrame([row]).to_csv(os.path.join(results_dir, stem(task) + ".csv"), index = False)
-    print({k: row[k] for k in ("status", "igd", "hypervolume", "n_func_eval", "wallclock")}, flush = True)
+    print({k: row[k] for k in ("status", "igd", "archive", "n_func_eval", "wallclock")}, flush = True)
 
 
 if __name__ == "__main__":
