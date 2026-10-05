@@ -8,8 +8,8 @@
 #SBATCH --partition=Virtual             # vCPU's only - no model in this sweep needs a GPU
 #SBATCH --mem=4G                        # adjust if a task is killed for memory
 #SBATCH --time=08:00:00                 # LAS refits the interpolant every iteration, so allow room
-#SBATCH -o logs/%x_%A_%a.out
-#SBATCH -e logs/%x_%A_%a.err
+#SBATCH -o logs/%x_%A_%a.out            # logs/ must already exist: SLURM opens these before the
+#SBATCH -e logs/%x_%A_%a.err            # script runs, and the job dies silently if it cannot
 
 # Runs one (model, problem, n_dim, n_obj, seed) of the grid in job.conf.
 #
@@ -21,9 +21,16 @@
 
 set -eo pipefail        # not -u: ~/.bashrc often reads variables that are unset in a batch shell
 
-cd "$(dirname "${BASH_SOURCE[0]}")"
+# under sbatch the script runs from a copy in the node's spool directory, so BASH_SOURCE points
+# there rather than at the repo; SLURM_SUBMIT_DIR is where sbatch was called from
+cd "${SLURM_SUBMIT_DIR:-$(dirname "${BASH_SOURCE[0]}")}"
 T1=$(date +%s)
 mkdir -p logs results
+
+if [[ ! -f run_experiment.py ]]; then
+  echo "run_experiment.py is not in $(pwd) - submit from the script/ directory" >&2
+  exit 2
+fi
 
 CONF="job.conf"
 TASK_ID="${SLURM_ARRAY_TASK_ID:-${1:-}}"
