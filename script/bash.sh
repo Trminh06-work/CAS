@@ -4,9 +4,9 @@
 #SBATCH --array=0-659                   # one task per line of `run_experiment.py --list` (see job.conf)
 #SBATCH --ntasks=1                      # We are planning to run one task
 #SBATCH --nodes=1                       # We request the use of 1 compute node for this task
-#SBATCH --cpus-per-task=8               # We request the use of 2 CPU's for this single task
-#SBATCH --partition=Virtual             # vCPU's only - no model in this sweep needs a GPU
-#SBATCH --mem=4G                        # adjust if a task is killed for memory
+#SBATCH --cpus-per-task=1               # nothing here threads, and 1 core per task lets every
+#SBATCH --partition=Virtual             # node take work - no model in this sweep needs a GPU
+#SBATCH --mem=6000M                     # 4 x 6000M fits a 24000M node, so all 4 cores stay usable
 #SBATCH --time=08:00:00                 # LAS refits the interpolant every iteration, so allow room
 #SBATCH -o logs/%x_%A_%a.out            # logs/ must already exist: SLURM opens these before the
 #SBATCH -e logs/%x_%A_%a.err            # script runs, and the job dies silently if it cannot
