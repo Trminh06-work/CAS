@@ -1,4 +1,5 @@
 from abc import ABC
+from contextlib import contextmanager
 import numpy as np
 from scipy.optimize import minimize, nnls
 from pymoo_tests import Problem
@@ -29,6 +30,9 @@ class BaseModel(ABC):
         self.PS: np.ndarray = None              # Pareto set   - decision space  - (n_eval, PS_dim)
         self.w: np.ndarray = np.ones(self.PF_dim) / self.PF_dim if w0 is None else np.asarray(w0, dtype = float)       # weight vector for scalarisation
 
+        self._worst: np.ndarray = None          # worst point of the current archive - the utility offset
+        self.state_hist: dict = {}              # iteration -> what scalarise() needs besides w
+
         self.w_hist: np.ndarray = None          # weight used at each evaluation - (n_eval, PF_dim)
         self.obj_hist: np.ndarray = None        # the full history of the OBJECTIVER vectors found
         self.dec_hist: np.ndarray = None        # the full history of the DECISION vectors found
@@ -57,12 +61,33 @@ class BaseModel(ABC):
 
             Returns None before the first archive exists, i.e. during step 0.
         """
-        if self.PF is None:
-            return None
+        return None if self._worst is None else - F + self._worst
 
-        def worst_point():
-            return np.max(self.PF, axis = 0)
-        return - F + worst_point()
+
+    def _state(self):
+        """
+            Everything scalarise() reads besides w. The model keeps only its latest fit, so without
+            this a plot of iteration k would be drawn with the function learnt at the last one.
+        """
+        return dict(worst = self._worst)
+
+
+    def _set_state(self, state):
+        self._worst = state["worst"]
+
+
+    @contextmanager
+    def as_of(self, iteration):
+        """
+            Put the model back into the scalarising state it had at `iteration` for the duration of
+            the block - an iteration that was never recorded leaves it as it is.
+        """
+        live = self._state()
+        try:
+            self._set_state(self.state_hist.get(int(iteration), live))
+            yield
+        finally:
+            self._set_state(live)
 
 
     def F(self, x, w):
@@ -131,6 +156,7 @@ class BaseModel(ABC):
         # Follow the Pareto optimality definition
         keep = self.non_dominated(self.obj_hist)
         self.PF, self.PS = self.obj_hist[keep], self.dec_hist[keep]
+        self._worst = np.max(self.PF, axis = 0)
 
 
     def solve(self):
@@ -141,6 +167,7 @@ class BaseModel(ABC):
 
         # Step 0: Initialisation
         self.iteration = 0
+        self.state_hist[0] = self._state()      # before any fit - the plain weighted sum
         x0 = self.rng.random(self.PS_dim)
         # self.F is -F_val -> minimise becomes maximise
         minimize(self.F, x0, args = (self.w,), method = self.solver, bounds = bounds, tol = self.tol)
@@ -156,6 +183,7 @@ class BaseModel(ABC):
             # y is the vector of ones y = [1, 1, ..., 1] whose size is len(self.PF)
             self.y = np.ones(len(self.PF))
             self.w = self.learn_weight()
+            self.state_hist[it] = self._state()
 
             # Step 2: Optimise subject to the learnt weight
             for _ in range(int(self.max_iter / 10)):
@@ -239,6 +267,23 @@ class ChoquetModel(BaseModel):
             return -self.choquet_reg.choquet_value(self._utility(F))
 
 
+    def _state(self):
+        # choquet_value() reads v (the capacity), w_vec (the input scaling), b_int and method - the
+        # weight in w_hist is w_vec, which is not on its own enough to rebuild the integral
+        reg, state = self.choquet_reg, super()._state()
+        v = getattr(reg, "v", None)
+        state.update(method = reg.method, b_int = reg.b_int,
+                     v = None if v is None else np.array(v, dtype = float),
+                     w_vec = np.array(reg.w_vec, dtype = float))
+        return state
+
+
+    def _set_state(self, state):
+        super()._set_state(state)
+        reg = self.choquet_reg
+        reg.method, reg.b_int, reg.v, reg.w_vec = state["method"], state["b_int"], state["v"], state["w_vec"]
+
+
     def learn_weight(self):
         # Learn the new Choquet capacities
         w = self.choquet_reg.fit_choquet(
@@ -279,6 +324,19 @@ class LipschitzModel(BaseModel):
         if self.slip is None:
             return np.dot(F, w)
         return -np.asarray(self.slip.predict(F), dtype = float).reshape(-1)[0]
+
+
+    def _state(self):
+        # the constant in w_hist cannot rebuild the interpolant - keep the fitted object itself,
+        # which learn_weight() replaces rather than mutates
+        state = super()._state()
+        state["slip"] = self.slip
+        return state
+
+
+    def _set_state(self, state):
+        super()._set_state(state)
+        self.slip = state["slip"]
 
 
     def learn_weight(self):
