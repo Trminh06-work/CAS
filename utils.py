@@ -256,7 +256,8 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
             if plot_scalarisation and dim <= 3:
                 axes = [np.linspace(lo[k], hi[k], res) for k in range(dim)]
                 G = np.stack(np.meshgrid(*axes, indexing = "ij"), -1).reshape(-1, dim)
-                v = np.array([model.scalarise(f, w) for f in to_stored(G)])
+                with model.as_of(it):       # the fit of THIS iteration, not the one the run ended on
+                    v = np.array([model.scalarise(f, w) for f in to_stored(G)])
                 # plotly spaces isosurfaces inclusively over [isomin, isomax], and a level at the
                 # field's own min or max is empty - no cell straddles it - so keep them inside
                 iso = np.linspace(v.min(), v.max(), n_iso + 2)[1:-1]
