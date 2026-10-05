@@ -1,5 +1,5 @@
 import numpy as np
-from .liblipt import LibLipT
+from liblipt import LibLipT
 import torch
 import pandas as pd
 
@@ -28,7 +28,10 @@ class SLipInterpolant():
         else:
             self.mon = mon
 
-        # Construct the Slip interpolant using BaseModel's X/y split
+        # Construct the Slip interpolant from the training data given - contiguous float32,
+        # for compatibility with the liblip codebase
+        X = np.ascontiguousarray(X, dtype = np.float32)
+        y = np.ascontiguousarray(y, dtype = np.float32).reshape(-1)
         self.dim = int(X.shape[1])
         self.npts = int(X.shape[0])
         self.type = type
@@ -54,6 +57,10 @@ class SLipInterpolant():
 
         if self.type in ["local", "local_mon", "local_mix"]:
             self.sli.compute_local_lipschitz() # no fallback method for extensive data
+            # predict() uses the per-point constants directly; LipsConst is only reported, so summarise
+            # them by their mean - 0.0 when the library kept nothing
+            spline = getattr(self.sli, "LipSplineY", None)
+            self.LipsConst = float(spline.mean()) if spline is not None and spline.numel() else 0.0
 
         # Smooth version uses the global_mon with reduced LipsConst
         if self.type == "smooth":
