@@ -158,9 +158,10 @@ class BaseModel(ABC):
             self.w = self.learn_weight()
 
             # Step 2: Optimise subject to the learnt weight
-            x = self.rng.random(self.PS_dim)                             # random intial point for solver
-            minimize(self.F, x, args = (self.w,), method = self.solver,  # solve using scalarised F
-                     bounds = bounds, tol = self.tol, options={'maxiter': 50})
+            for _ in range(int(self.max_iter / 10)):
+                x = self.rng.random(self.PS_dim)                             # random intial point for solver
+                minimize(self.F, x, args = (self.w,), method = self.solver,  # solve using scalarised F
+                        bounds = bounds, tol = self.tol, options={'maxiter': 50})
             # Filter out the non-dominated points obtained -> current PF and PS approximation
             self.filter_PF_PS()
 
@@ -268,13 +269,16 @@ class LipschitzModel(BaseModel):
         self.num_k = num_k
         self.a = a
         self.b = b
-        self.w = w
+        self.knn_w = w          # knn weights for the interpolant - not BaseModel's weight vector
+        self.slip = None
 
 
     def scalarise(self, F, w):
         # The `w` for scalarisation is the LipConst, which is inhenrently
-        # stored in `self.slip`
-        return self.slip.predict(F)
+        # stored in `self.slip`. Step 0 runs before the first fit, so fall back to the weighted sum.
+        if self.slip is None:
+            return np.dot(F, w)
+        return -np.asarray(self.slip.predict(F), dtype = float).reshape(-1)[0]
 
 
     def learn_weight(self):
@@ -288,12 +292,13 @@ class LipschitzModel(BaseModel):
 
         # We must add the nadir point and 0 to the training data for SLip
         # Otherwise the data is subject to a flat function -> yield nothing
-        X = np.concat([self.PF, worst_point()])
-        y = np.concat([self.y, 0])
+        X = np.concatenate([self.PF, worst_point()[None, :]])   # (K + 1, n_obj)
+        y = np.concatenate([self.y, [0.0]])                     # (K + 1,)
 
         self.slip = SLipInterpolant(
-            X, y, self.type, self.mon, self.num_k, self.a, self.b, self.w
+            X, y, self.type, self.mon, self.num_k, self.a, self.b, self.knn_w
         )
         self.slip.fit()
 
-        return self.slip.LipsConst
+        # BaseModel keeps one weight row per evaluation, so hand the constant back as a vector
+        return np.full(self.PF_dim, float(self.slip.LipsConst))
