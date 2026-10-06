@@ -124,7 +124,7 @@ def visualise_weights(model: BaseModel, kind = "symmetric", show = True):
 
 
 def visualise(model, kind = "objective", show_true = True, plot_scalarisation = False,
-              zoom = True, show = True):
+              zoom = True, show_params = True, show = True):
     """
         Plot one view of a solved model, in the problem's own objective units.
 
@@ -142,6 +142,11 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
         show_true            draw the analytical front (no effect if the problem has none)
 
         plot_scalarisation   "learning" only: overlay the level sets of scalarise(., w_k) - ignore n_obj > 3
+
+        show_params          "learning" only: a panel beside the plot with the parameters that
+                             iteration was fitted with - the capacity and scaling vector for
+                             ChoquetModel, the interpolant and its Lipschitz constant for
+                             LipschitzModel, the weights otherwise
 
         zoom                 frame the archive and the true front instead of
                              every evaluation, so the front is not squashed into a corner by the
@@ -232,15 +237,84 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
             boxes = {int(it): (lo, hi) for it in iters}
 
 
+        def wrap(cells, per_line = 4):
+            """One line per `per_line` entries, so the panel stays narrow whatever n_obj is."""
+            return ("<br>&nbsp;&nbsp;&nbsp;").join(", ".join(cells[i:i + per_line])
+                                                   for i in range(0, len(cells), per_line))
+
+        def numbers(a, per_line = 6):
+            return wrap([f"{v:.4g}" for v in np.atleast_1d(np.asarray(a, float)).ravel()], per_line)
+
+        def param_text(it, w):
+            """
+                What the model was fitted to at iteration `it`, read from the state solve() recorded:
+                the capacity and scaling vector for the Choquet model, the interpolant and its
+                constant for the Lipschitz one, the weights otherwise.
+            """
+            state = getattr(model, "state_hist", {}).get(int(it))
+            lines = [f"<b>{type(model).__name__}</b> - iteration {int(it)}"]
+            if state is None:                       # solved before state_hist existed
+                lines.append("no parameters recorded for this iteration")
+                return "<br>".join(lines)
+
+            if "v" in state:                        # ChoquetModel
+                lines.append(f"scaling w_vec: {numbers(state['w_vec'])}")
+                v = state["v"]
+                if v is None:
+                    lines.append("capacity: not fitted yet - plain weighted sum")
+                else:
+                    v = np.asarray(v, float).ravel()
+                    pairs = [(i, j) for i in range(dim) for j in range(i + 1, dim)]
+                    if len(v) == dim + len(pairs):  # 2-additive, in Mobius form
+                        lines.append("capacity m_i: "
+                                     + wrap([f"m{i + 1}={v[i]:.4g}" for i in range(dim)]))
+                        if pairs:
+                            lines.append("interactions: "
+                                         + wrap([f"m{i + 1}{j + 1}={v[dim + k]:.4g}"
+                                                 for k, (i, j) in enumerate(pairs)], 3))
+                    else:                           # any other fitting method - show it as it is
+                        lines.append(f"capacity ({len(v)} values): {numbers(v)}")
+                lines.append(f"intercept b: {float(state['b_int']):.4g}")
+
+            elif "slip" in state:                   # LipschitzModel
+                sl = state["slip"]
+                if sl is None:
+                    lines.append("interpolant: not fitted yet - plain weighted sum")
+                else:
+                    lines.append(f"Lipschitz constant: {float(sl.LipsConst):.6g}")
+                    lines.append(f"interpolant: {sl.type}, {sl.npts} training points, knn {sl.num_k}")
+
+            else:                                   # LinearModel, and anything else w is enough for
+                lines.append(f"weights w: {numbers(w)}")
+
+            worst = state.get("worst")
+            lines.append("utility offset: " + ("none - step 0 minimises w.F" if worst is None
+                                               else numbers(worst)))
+            return "<br>".join(lines)
+
+        def panel(it):
+            """The parameter box beside the plot - it rides in the frame layout, so it follows the slider."""
+            if not show_params:
+                return []
+            return [dict(text = param_text(it, W[np.argmax(all_it == it)]),
+                         xref = "paper", yref = "paper", x = 1.02, y = 1.0,
+                         xanchor = "left", yanchor = "top", align = "left", showarrow = False,
+                         font = dict(family = "Courier New, monospace", size = 11),
+                         bordercolor = "#999999", borderwidth = 1, borderpad = 6,
+                         bgcolor = "rgba(255,255,255,0.85)")]
+
         def axes_layout(it):
             """The axis ranges of one frame - they travel with the frame so the slider rescales them."""
             lo, hi = boxes[int(it)]
             if dim == 3:
-                return go.Layout(scene = dict(zip(("xaxis", "yaxis", "zaxis"),
+                return go.Layout(annotations = panel(it),
+                                 scene = dict(zip(("xaxis", "yaxis", "zaxis"),
                                                   (dict(range = [lo[k], hi[k]]) for k in range(3)))))
             if dim == 2:
-                return go.Layout(xaxis = dict(range = [lo[0], hi[0]]), yaxis = dict(range = [lo[1], hi[1]]))
-            return go.Layout(yaxis = dict(range = [lo.min(), hi.max()]))    # parallel coordinates
+                return go.Layout(annotations = panel(it),
+                                 xaxis = dict(range = [lo[0], hi[0]]), yaxis = dict(range = [lo[1], hi[1]]))
+            return go.Layout(annotations = panel(it),
+                             yaxis = dict(range = [lo.min(), hi.max()]))    # parallel coordinates
 
         def traces(it):
             w = W[np.argmax(all_it == it)]               # weight learnt at iteration it
@@ -293,7 +367,8 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
         fig.frames = [go.Frame(name = str(it), data = traces(it), layout = axes_layout(it),
                                traces = list(range(base, len(fig.data)))) for it in iters]
         fig.update_layout(
-            height = 600, width = 700, showlegend = True,
+            height = 600, width = 1020 if show_params else 700, showlegend = True,
+            margin = dict(r = 330) if show_params else None,
             legend = dict(yanchor = "top", y = 0.99, xanchor = "right", x = 0.99,
                           bgcolor = "rgba(255,255,255,0.7)"),
             title = f"{type(model.problem).__name__} - learning process",
