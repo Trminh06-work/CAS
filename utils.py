@@ -287,9 +287,9 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
             else:                                   # LinearModel, and anything else w is enough for
                 lines.append(f"weights w: {numbers(w)}")
 
-            worst = state.get("worst")
-            lines.append("utility offset: " + ("none - step 0 minimises w.F" if worst is None
-                                               else numbers(worst)))
+            # worst = state.get("worst")
+            # lines.append("utility offset: " + ("none - step 0 minimises w.F" if worst is None
+            #                                    else numbers(worst)))
             return "<br>".join(lines)
 
         def panel(it):
