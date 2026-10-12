@@ -2,6 +2,7 @@ from abc import ABC
 from contextlib import contextmanager
 import numpy as np
 from scipy.optimize import minimize, nnls
+from scipy.optimize import direct
 from pymoo_tests import Problem
 
 import pyfmtools as fm
@@ -168,14 +169,18 @@ class BaseModel(ABC):
         # Step 0: Initialisation
         self.iteration = 0
         self.state_hist[0] = self._state()      # before any fit - the plain weighted sum
-        x0 = self.rng.random(self.PS_dim)
-        # self.F is -F_val -> minimise becomes maximise
-        minimize(self.F, x0, args = (self.w,), method = self.solver, bounds = bounds, tol = self.tol)
+        # Other NLP solvers
+        # x0 = self.rng.random(self.PS_dim)
+        # minimize(self.F, x0, args = (self.w,), method = self.solver, bounds = bounds, tol = self.tol)
+
+        # DIRECT solver
+        direct(self.F, args = (self.w,),  # solve using scalarised F
+                bounds = bounds, maxiter = self.max_iter)
         # Filter out the non-dominated points obtained -> current PF and PS approximation
         self.filter_PF_PS()
 
         # Adaptive Scalarisation
-        for it in range(1, self.max_iter + 1):
+        for it in range(1, int(self.max_iter / 5)):
             self.iteration = it
 
             # Step 1: Learn weight
@@ -186,10 +191,19 @@ class BaseModel(ABC):
             self.state_hist[it] = self._state()
 
             # Step 2: Optimise subject to the learnt weight
-            for _ in range(int(self.max_iter / 10)):
-                x = self.rng.random(self.PS_dim)                             # random intial point for solver
-                minimize(self.F, x, args = (self.w,), method = self.solver,  # solve using scalarised F
-                        bounds = bounds, tol = self.tol, options={'maxiter': 50})
+
+            if it % 5 == 0:
+                # DIRECT solver
+                # -> no need multi-start
+                direct(self.F, args = (self.w,),  # solve using scalarised F
+                        bounds = bounds, maxiter = self.max_iter)
+            else:
+                # Other NLP solvers
+                for _ in range(self.max_iter):
+                    x = self.rng.random(self.PS_dim)                             # random intial point for solver
+                    minimize(self.F, x, args = (self.w,), method = self.solver,  # solve using scalarised F
+                            bounds = bounds, tol = self.tol, options={'maxiter': 50})
+
             # Filter out the non-dominated points obtained -> current PF and PS approximation
             self.filter_PF_PS()
 
