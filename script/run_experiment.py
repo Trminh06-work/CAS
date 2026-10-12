@@ -2,7 +2,7 @@
     One configuration of the benchmark - one model, one problem, one seed - for a SLURM array task.
 
         python run_experiment.py --conf job.conf --count          how many tasks the grid expands to
-        python run_experiment.py --conf job.conf --list           the expanded task list, one per line
+        python run_experiment.py --conf job.conf --list           the expanded task list, one per line with index, starting from 0
         python run_experiment.py --conf job.conf --index 7        run task 7 and write its result
 
     Each task writes results/<model>_<problem>_d<n_dim>_m<n_obj>_s<seed>.csv (one row, with a header)
@@ -180,7 +180,8 @@ def main():
     parser.add_argument("--results", default = None, help = "defaults to the results_dir in the conf")
     parser.add_argument("--index", type = int, help = "which task to run (0 based)")
     parser.add_argument("--count", action = "store_true", help = "print how many tasks there are")
-    parser.add_argument("--list", action = "store_true", help = "print every task, one per line")
+    parser.add_argument("--list", action = "store_true",
+                        help = "print every task, one per line, led by its 0 based index")
     parser.add_argument("--aggregate", action = "store_true",
                         help = "after the sweep: merge the rows and add the per-seed hypervolume")
     args = parser.parse_args()
@@ -192,7 +193,10 @@ def main():
         print(len(grid))
         return
     if args.list:
-        print("\n".join(" ".join(str(part) for part in task) for task in grid))
+        # the leading number is the --index / SLURM array id of that row
+        width = len(str(len(grid) - 1))
+        print("\n".join(f"{i:>{width}} " + " ".join(str(part) for part in task)
+                        for i, task in enumerate(grid)))
         return
     if args.aggregate:
         results_dir = args.results or os.path.join(HERE, conf.get("results_dir", ["results"])[0])
