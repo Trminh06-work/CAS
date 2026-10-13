@@ -21,7 +21,7 @@ def many_models(models: List[Type[BaseModel]]) -> List[BaseModel]:
 
 
 
-def trace_log(model: BaseModel, max_rows: int = 15) -> str:
+def trace_log(model: BaseModel, max_rows: int = 100) -> str:
     """
         Write a readable trace of one solved model: the parameters of each outer iteration, then the
         evaluations it made and the value of the scalarising function there.
@@ -30,7 +30,8 @@ def trace_log(model: BaseModel, max_rows: int = 15) -> str:
         run, so it has to be recomputed against the state the solver actually saw.
     """
     path = f"trace_{type(model).__name__}_{type(model.problem).__name__}.log"
-    obj, W = np.atleast_2d(model.obj_hist), np.atleast_2d(model.w_hist)
+    obj, dec = np.atleast_2d(model.obj_hist), np.atleast_2d(model.dec_hist)
+    W = np.atleast_2d(model.w_hist)
     iters = np.asarray(model.iter_hist)
     names = [f"f{i + 1}" for i in range(model.PF_dim)]
 
@@ -45,6 +46,8 @@ def trace_log(model: BaseModel, max_rows: int = 15) -> str:
 
             table = pd.DataFrame(obj[rows], columns = names)
             table["scalarised"] = scal
+            table.insert(0, "x", [np.array2string(x, precision = 4, separator = ",",
+                                                  max_line_width = np.inf) for x in dec[rows]])
 
             fh.write(f"\n=== iteration {int(it)}: {int(rows.sum())} evaluations, w = {W[rows][0]}\n")
 
@@ -59,7 +62,7 @@ def trace_log(model: BaseModel, max_rows: int = 15) -> str:
 
             for key, value in model.state_hist.get(int(it), {}).items():
                 if key == "slip" and value is not None:     # the object is not readable on its own
-                    value = f"{value.type}, {value.npts} points,\n  L = {value.LipsConst:.6g}"
+                    value = f"{value.type}, {value.npts} points,\n  LC = {value.LipsConst:.6g}"
                 fh.write(f"  {key:10s}: {value}\n")
             fh.write(table.head(max_rows).to_string(index = False) + "\n")
     return path
@@ -75,9 +78,9 @@ def trace_log(model: BaseModel, max_rows: int = 15) -> str:
     For multiple models -> add more to it
 """
 models = [
-    LinearModel(problem = ZDT1(n_dim = 20), max_iter = 50, random_state = 42),
-    ChoquetModel(problem = ZDT1(n_dim = 20), max_iter = 50, random_state = 42, method = 2),
-    LipschitzModel(problem = ZDT1(n_dim = 20), max_iter = 50, random_state = 42,
+    LinearModel(problem = ZDT1(n_dim = 20), max_iter = 10, random_state = 42),
+    ChoquetModel(problem = ZDT1(n_dim = 20), max_iter = 10, random_state = 42, method = 2),
+    LipschitzModel(problem = ZDT1(n_dim = 20), max_iter = 10, random_state = 42,
                     type = "global_mon", num_k = 2, mon = [1, 1, 1])
 ]
 
