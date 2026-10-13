@@ -32,20 +32,31 @@ def trace_log(model: BaseModel, max_rows: int = 15) -> str:
     path = f"trace_{type(model).__name__}_{type(model.problem).__name__}.log"
     obj, W = np.atleast_2d(model.obj_hist), np.atleast_2d(model.w_hist)
     iters = np.asarray(model.iter_hist)
+    names = [f"f{i + 1}" for i in range(model.PF_dim)]
 
     with open(path, "w") as fh:
         fh.write(f"{type(model).__name__} on {type(model.problem).__name__} - "
                  f"seed {model.random_state}, {model.num_func_eval} evaluations\n")
 
         for it in np.unique(iters):
-            rows = iters == it
+            rows = (iters == it)
             with model.as_of(it):
                 scal = [float(model.scalarise(f, w)) for f, w in zip(obj[rows], W[rows])]
 
-            table = pd.DataFrame(obj[rows], columns = [f"f{i + 1}" for i in range(model.PF_dim)])
+            table = pd.DataFrame(obj[rows], columns = names)
             table["scalarised"] = scal
 
             fh.write(f"\n=== iteration {int(it)}: {int(rows.sum())} evaluations, w = {W[rows][0]}\n")
+
+            prev = obj[iters < it]
+            if len(prev):
+                pf_it = prev[model.non_dominated(prev)]
+                u = model.state_hist[int(it)]["worst"] - pf_it
+                fit = pd.DataFrame(np.hstack([pf_it, u]),
+                                   columns = names + [f"u{i + 1}" for i in range(model.PF_dim)])
+                fh.write(f"  learn_weight input: {len(pf_it)} non-dominated points\n")
+                fh.write(fit.head(max_rows).to_string(index = False) + "\n")
+
             for key, value in model.state_hist.get(int(it), {}).items():
                 if key == "slip" and value is not None:     # the object is not readable on its own
                     value = f"{value.type}, {value.npts} points,\n  L = {value.LipsConst:.6g}"
@@ -64,9 +75,9 @@ def trace_log(model: BaseModel, max_rows: int = 15) -> str:
     For multiple models -> add more to it
 """
 models = [
-    LinearModel(problem = ZDT2(n_dim = 20), max_iter = 50, random_state = 42),
-    ChoquetModel(problem = ZDT2(n_dim = 20), max_iter = 50, random_state = 42, method = 2),
-    LipschitzModel(problem = ZDT2(n_dim = 20), max_iter = 50, random_state = 42,
+    LinearModel(problem = ZDT1(n_dim = 20), max_iter = 50, random_state = 42),
+    ChoquetModel(problem = ZDT1(n_dim = 20), max_iter = 50, random_state = 42, method = 2),
+    LipschitzModel(problem = ZDT1(n_dim = 20), max_iter = 50, random_state = 42,
                     type = "global_mon", num_k = 2, mon = [1, 1, 1])
 ]
 
