@@ -175,19 +175,20 @@ class BaseModel(ABC):
 
         # DIRECT solver
         direct(self.F, args = (self.w,),  # solve using scalarised F
-                bounds = bounds, maxiter = self.max_iter)
+                bounds = bounds, maxiter = self.max_iter * 10)
         # Filter out the non-dominated points obtained -> current PF and PS approximation
         self.filter_PF_PS()
 
         # Adaptive Scalarisation
-        for it in range(1, int(self.max_iter / 5)):
+        for it in range(1, int(self.max_iter + 1)):
             self.iteration = it
 
             # Step 1: Learn weight
             # X is the objective space -> self.PF
             # y is the vector of ones y = [1, 1, ..., 1] whose size is len(self.PF)
             self.y = np.ones(len(self.PF))
-            self.w = self.learn_weight()
+            if self.PF.shape[0] > 5:
+                self.w = self.learn_weight()
             self.state_hist[it] = self._state()
 
             # Step 2: Optimise subject to the learnt weight
@@ -196,7 +197,7 @@ class BaseModel(ABC):
                 # DIRECT solver
                 # -> no need multi-start
                 direct(self.F, args = (self.w,),  # solve using scalarised F
-                        bounds = bounds, maxiter = self.max_iter)
+                        bounds = bounds, maxiter = self.max_iter * 10)
             else:
                 # Other NLP solvers
                 for _ in range(self.max_iter):
