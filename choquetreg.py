@@ -391,7 +391,7 @@ class ChoquetReg:
             self.fit_choquet_inner( X, y, use_intercept, kadd, method,enforceone=enforceone)
             loss=np.sum((y-self.choquet_value_t(X))**2)
             return float(loss)
-        bounds = [0, 1000] * self.dim
+        bounds = [(0, 1000)] * self.dim
         result = minimize(objective, self.w_vec.copy(), method='Nelder-Mead', bounds = bounds,
                    options={'maxiter': 100, 'xatol': 1e-3})
         self.w_vec = np.asarray(result.x, dtype=np.float64)
