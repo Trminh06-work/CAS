@@ -164,14 +164,13 @@ class ZDT2_Combined(ElementwiseProblem):
         if C < 0:
             raise ValueError("C must be non-negative")
         self.order = np.arange(4) if order is None else np.asarray(order, dtype = int)  # any permutation of 0..4
-
         if np.any(self.order < 0) or np.any(self.order >= 4):
             raise ValueError("order entries must be in [0, 4)")
         if len(set(self.order.tolist())) != len(self.order):
             raise ValueError("order must not repeat indices")
 
         self.inner = ZDT2(n_dim = n_dim).inner
-        super().__init__(n_var = self.inner.n_var, n_obj = len(order),
+        super().__init__(n_var = self.inner.n_var, n_obj = len(self.order),
                         xl = np.zeros(n_dim), xu = np.ones(n_dim))
         self.n_dim = n_dim
         self.C = C
