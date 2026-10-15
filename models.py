@@ -328,12 +328,14 @@ class LipschitzModel(BaseModel):
             - learnt_weight(): fit() - Lipschitz constant estimation from non–dominated PF
     """
     def __init__(self,
-        type: str = "global", mon: np.array = None, num_k: int = 1,
+        type: str = "global_mon", mon: np.array = None, num_k: int = 1,
         a = None, b = None, w = None, **kwargs
     ):
         super().__init__(**kwargs)
         self.type = type
-        self.mon = mon
+        self.mon = np.ones(self.problem.n_obj) if mon is None else mon
+        if self.mon != self.problem.n_obj:
+            raise ValueError("mon size must be equal to number of objectives")
         self.num_k = num_k
         self.a = a
         self.b = b
