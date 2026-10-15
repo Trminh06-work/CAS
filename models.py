@@ -334,7 +334,7 @@ class LipschitzModel(BaseModel):
         super().__init__(**kwargs)
         self.type = type
         self.mon = np.ones(self.problem.n_obj) if mon is None else mon
-        if self.mon != self.problem.n_obj:
+        if len(self.mon) != self.problem.n_obj:
             raise ValueError("mon size must be equal to number of objectives")
         self.num_k = num_k
         self.a = a
