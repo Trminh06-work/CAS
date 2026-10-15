@@ -21,7 +21,7 @@ def many_models(models: List[Type[BaseModel]]) -> List[BaseModel]:
 
 
 
-def trace_log(model: BaseModel, max_rows: int = 100) -> str:
+def trace_log(model: BaseModel, max_rows: int = None) -> str:
     """
         Write a readable trace of one solved model: the parameters of each outer iteration, then the
         evaluations it made and the value of the scalarising function there.
@@ -78,9 +78,9 @@ def trace_log(model: BaseModel, max_rows: int = 100) -> str:
     For multiple models -> add more to it
 """
 models = [
-    LinearModel(problem = ZDT1(n_dim = 20), max_iter = 10, random_state = 42),
-    ChoquetModel(problem = ZDT1(n_dim = 20), max_iter = 10, random_state = 42, method = 2),
-    LipschitzModel(problem = ZDT1(n_dim = 20), max_iter = 10, random_state = 42,
+    LinearModel(problem = ZDT2(n_dim = 20), max_iter = 50, random_state = 42),
+    ChoquetModel(problem = ZDT2(n_dim = 20), max_iter = 50, random_state = 42, method = 2),
+    LipschitzModel(problem = ZDT2(n_dim = 20), max_iter = 50, random_state = 42,
                     type = "global_mon", num_k = 2, mon = [1, 1, 1])
 ]
 
