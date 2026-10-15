@@ -112,7 +112,7 @@ class ZDT1_Shifted(ElementwiseProblem):
     """
         ZDT1(x + C) on ZDT1's own box, 0 <= x <= 1, so the decision space is unchanged
     """
-    def __init__(self, n_dim: int = 10, C: float = 0.5):
+    def __init__(self, n_dim: int = 10, C: float = 0.2):
         if C < 0:
             raise ValueError("C must be non-negative")
 
@@ -123,9 +123,64 @@ class ZDT1_Shifted(ElementwiseProblem):
         self.C = C
 
 
-    def _evaluate(self, x, out, *args, **kwargs):
+    def _evaluate(self, x, out):
         f = self.inner.evaluate(np.asarray(x + self.C, float))
         out["F"] = f
+
+
+    def pareto_front(self, n_points = 300):
+        raise NotImplementedError("Self-constructed problem - no analytical PF")
+
+
+class ZDT2_Shifted(ElementwiseProblem):
+    """
+        ZDT2(x + C) on ZDT1's own box, 0 <= x <= 1, so the decision space is unchanged
+    """
+    def __init__(self, n_dim: int = 10, C: float = 0.2):
+        if C < 0:
+            raise ValueError("C must be non-negative")
+
+        self.inner = ZDT2(n_dim = n_dim).inner
+        super().__init__(n_var = self.inner.n_var, n_obj = self.inner.n_obj,
+                        xl = np.zeros(n_dim), xu = np.ones(n_dim))
+        self.n_dim = n_dim
+        self.C = C
+
+
+    def _evaluate(self, x, out):
+        f = self.inner.evaluate(np.asarray(x + self.C, float))
+        out["F"] = f
+
+
+    def pareto_front(self, n_points = 300):
+        raise NotImplementedError("Self-constructed problem - no analytical PF")
+
+
+class ZDT2_Combined(ElementwiseProblem):
+    """
+        ZDT2(x + C) on ZDT1's own box, 0 <= x <= 1, so the decision space is unchanged
+    """
+    def __init__(self, n_dim: int = 10, order = None, C: float = 0.2):
+        if C < 0:
+            raise ValueError("C must be non-negative")
+        self.order = np.arange(4) if order is None else np.asarray(order, dtype = int)  # any permutation of 0..4
+
+        if np.any(self.order < 0) or np.any(self.order >= 4):
+            raise ValueError("order entries must be in [0, 4)")
+        if len(set(self.order.tolist())) != len(self.order):
+            raise ValueError("order must not repeat indices")
+
+        self.inner = ZDT2(n_dim = n_dim).inner
+        super().__init__(n_var = self.inner.n_var, n_obj = len(order),
+                        xl = np.zeros(n_dim), xu = np.ones(n_dim))
+        self.n_dim = n_dim
+        self.C = C
+
+
+    def _evaluate(self, x, out):
+        shifted = self.inner.evaluate(np.asarray(x + self.C, float))
+        origin = self.inner.evaluate(np.asarray(x, float))
+        out["F"] = np.concat([origin, shifted])[self.order]
 
 
     def pareto_front(self, n_points = 300):
