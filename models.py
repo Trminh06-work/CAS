@@ -164,6 +164,10 @@ class BaseModel(ABC):
         # keep the search inside the box the test problem is defined on
         bounds = list(zip(self.problem.xl, self.problem.xu)) if self.problem.xl is not None else None
 
+        # the box the random multi-start points are drawn from - the problem's own, not [0, 1)
+        lo, hi = ((np.zeros(self.PS_dim), np.ones(self.PS_dim)) if self.problem.xl is None else
+                  (np.asarray(self.problem.xl, float), np.asarray(self.problem.xu, float)))
+
         start = time.perf_counter()
 
         # Step 0: Initialisation
@@ -201,7 +205,7 @@ class BaseModel(ABC):
             else:
                 # Other NLP solvers
                 for _ in range(self.max_iter):
-                    x = self.rng.random(self.PS_dim)                             # random intial point for solver
+                    x = lo + (hi - lo) * self.rng.random(self.PS_dim)            # random intial point for solver
                     minimize(self.F, x, args = (self.w,), method = self.solver,  # solve using scalarised F
                             bounds = bounds, tol = self.tol, options={'maxiter': 50})
 
