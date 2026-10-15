@@ -191,8 +191,7 @@ class BaseModel(ABC):
             # X is the objective space -> self.PF
             # y is the vector of ones y = [1, 1, ..., 1] whose size is len(self.PF)
             self.y = np.ones(len(self.PF))
-            if self.PF.shape[0] > 5:
-                self.w = self.learn_weight()
+            self.w = self.learn_weight()
             self.state_hist[it] = self._state()
 
             # Step 2: Optimise subject to the learnt weight
@@ -305,6 +304,11 @@ class ChoquetModel(BaseModel):
 
     def learn_weight(self):
         # Learn the new Choquet capacities
+        if self.PF.shape[0] <= 5:
+            w, _ = nnls(self._utility(self.PF), self.y)    # this solver gives solution s.t. w >= 0
+            n = np.linalg.norm(w)
+            return w / n if n > 0 else np.ones(self.PF_dim) / self.PF_dim
+
         w = self.choquet_reg.fit_choquet(
             self._utility(self.PF) , self.y,
             use_intercept = False, kadd = 2, method = self.method, enforceone = False
@@ -342,7 +346,8 @@ class LipschitzModel(BaseModel):
         # stored in `self.slip`. Step 0 runs before the first fit, so fall back to the weighted sum.
         if self.slip is None:
             return np.dot(F, w)
-        return -np.asarray(self.slip.predict(F), dtype = float).reshape(-1)[0]
+        # return -np.asarray(self.slip.predict(F), dtype = float).reshape(-1)[0]
+        return -np.asarray(self.slip.predict(self._utility(F)), dtype = float).reshape(-1)[0]
 
 
     def _state(self):
@@ -362,14 +367,21 @@ class LipschitzModel(BaseModel):
         """
             Return the Lipchitz constant estimated from non-dominated PF and 1
         """
+        if self.PF.shape[0] <= 5:
+            w, _ = nnls(self._utility(self.PF), self.y)    # this solver gives solution s.t. w >= 0
+            n = np.linalg.norm(w)
+            return w / n if n > 0 else np.ones(self.PF_dim) / self.PF_dim
+
         def worst_point():
             # worst point of all current non-dominated solutions
             # we shall refer to as reference nadir point
-            return np.max(self.PF, axis = 0)
+            # return np.max(self.self.PF, axis = 0)
+            return np.max(self._utility(self.PF), axis = 0)
 
         # We must add the nadir point and 0 to the training data for SLip
         # Otherwise the data is subject to a flat function -> yield nothing
         X = np.concatenate([self.PF, worst_point()[None, :]])   # (K + 1, n_obj)
+        X = np.concatenate([self._utility(self.PF), worst_point()[None, :]])   # (K + 1, n_obj)
         y = np.concatenate([self.y, [0.0]])                     # (K + 1,)
 
         self.slip = SLipInterpolant(
