@@ -3,7 +3,7 @@ from pymoo.problems import get_problem
 from pymoo.core.problem import ElementwiseProblem
 
 
-
+# =============================== Base Class ===============================
 class Problem(ElementwiseProblem):
     def __init__(self, name: str = None, **kwargs):
         if name is None:
@@ -27,7 +27,7 @@ class Problem(ElementwiseProblem):
         raise NotImplementedError("The true Pareto set of this problem is not known")
 
 
-
+# =============================== ZDT Problems ===============================
 class ZDT1(Problem):
     def __init__(self, n_dim = 30):
         super().__init__("zdt1", n_var = n_dim)
@@ -79,6 +79,7 @@ class ZDT6(Problem):
 
 
 
+# =============================== DTLZ Problems ===============================
 class DTLZ1(Problem):
     def __init__(self, n_dim = 10, n_obj = 3):
         super().__init__("dtlz1", n_var = n_dim, n_obj = n_obj)
@@ -103,3 +104,29 @@ class DTLZ2(Problem):
         X = np.full((n_points, self.n_dim), 0.5)
         X[:, :self.n_obj - 1] = rng.random((n_points, self.n_obj - 1))
         return X
+
+
+# =============================== Self-constructed Problems ===============================
+
+class ZDT1_Shifted(ElementwiseProblem):
+    """
+        ZDT1(x + C) on ZDT1's own box, 0 <= x <= 1, so the decision space is unchanged
+    """
+    def __init__(self, n_dim: int = 10, C: float = 0.5):
+        if C < 0:
+            raise ValueError("C must be non-negative")
+
+        self.inner = ZDT1(n_dim = n_dim).inner
+        super().__init__(n_var = self.inner.n_var, n_obj = self.inner.n_obj,
+                        xl = np.zeros(n_dim), xu = np.ones(n_dim))
+        self.n_dim = n_dim
+        self.C = C
+
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        f = self.inner.evaluate(np.asarray(x + self.C, float))
+        out["F"] = f
+
+
+    def pareto_front(self, n_points = 300):
+        raise NotImplementedError("Self-constructed problem - no analytical PF")
