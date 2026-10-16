@@ -178,8 +178,15 @@ class BaseModel(ABC):
         # minimize(self.F, x0, args = (self.w,), method = self.solver, bounds = bounds, tol = self.tol)
 
         # DIRECT solver
+        # Use the given weight vector first
         direct(self.F, args = (self.w,),  # solve using scalarised F
                 bounds = bounds, maxiter = self.max_iter * 10)
+        # Then apply multi-start weight vectors
+        # for _ in range(self.max_iter * 100):
+        #     w = self.rng.dirichlet(np.ones(self.PF_dim))     # no repeated vector, \sum_{w_i} = 1 and w_i > 0
+        #     direct(self.F, args = (w,),  # solve using scalarised F
+        #             bounds = bounds, maxiter = self.max_iter * 10)
+
         # Filter out the non-dominated points obtained -> current PF and PS approximation
         self.filter_PF_PS()
 
@@ -195,7 +202,6 @@ class BaseModel(ABC):
             self.state_hist[it] = self._state()
 
             # Step 2: Optimise subject to the learnt weight
-
             if it % 5 == 0:
                 # DIRECT solver
                 # -> no need multi-start
@@ -377,15 +383,12 @@ class LipschitzModel(BaseModel):
         def worst_point():
             # worst point of all current non-dominated solutions
             # we shall refer to as reference nadir point
-            # return np.max(self.self.PF, axis = 0)
-            return np.max(self._utility(self.PF), axis = 0)
+            return np.max(self.PF, axis = 0)
 
         # We must add the nadir point and 0 to the training data for SLip
         # Otherwise the data is subject to a flat function -> yield nothing
-        X = np.concatenate([self.PF, worst_point()[None, :]])   # (K + 1, n_obj)
-        X = np.concatenate([self._utility(self.PF), worst_point()[None, :]])   # (K + 1, n_obj)
+        X = np.concatenate([self._utility(self.PF), self._utility(worst_point())[None, :]])   # (K + 1, n_obj)
         y = np.concatenate([self.y, [0.0]])                     # (K + 1,)
-
         self.slip = SLipInterpolant(
             X, y, self.type, self.mon, self.num_k, self.a, self.b, self.knn_w
         )
