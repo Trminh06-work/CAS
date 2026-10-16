@@ -250,8 +250,9 @@ class LinearModel(BaseModel):
 
         # argmin of w.F is scale–invariant for w >= 0
         # as the F -> the pf (near the origin 0), the ||w|| diverges
-        n = np.linalg.norm(w)
-        return w / n if n > 0 else np.ones(self.PF_dim) / self.PF_dim
+        # n = np.linalg.norm(w)
+        # return w / n if n > 0 else np.ones(self.PF_dim) / self.PF_dim
+        return w
 
 
 # ===================================================================
@@ -312,8 +313,9 @@ class ChoquetModel(BaseModel):
         # Learn the new Choquet capacities
         if self.PF.shape[0] <= 5:
             w, _ = nnls(self._utility(self.PF), self.y)    # this solver gives solution s.t. w >= 0
-            n = np.linalg.norm(w)
-            return w / n if n > 0 else np.ones(self.PF_dim) / self.PF_dim
+            # n = np.linalg.norm(w)
+            # return w / n if n > 0 else np.ones(self.PF_dim) / self.PF_dim
+            return w
 
         w = self.choquet_reg.fit_choquet(
             self._utility(self.PF) , self.y,
@@ -377,8 +379,9 @@ class LipschitzModel(BaseModel):
         """
         if self.PF.shape[0] <= 5:
             w, _ = nnls(self._utility(self.PF), self.y)    # this solver gives solution s.t. w >= 0
-            n = np.linalg.norm(w)
-            return w / n if n > 0 else np.ones(self.PF_dim) / self.PF_dim
+            # n = np.linalg.norm(w)
+            # return w / n if n > 0 else np.ones(self.PF_dim) / self.PF_dim
+            return w
 
         def worst_point():
             # worst point of all current non-dominated solutions
