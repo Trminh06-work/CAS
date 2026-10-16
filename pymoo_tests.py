@@ -3,6 +3,17 @@ from pymoo.problems import get_problem
 from pymoo.core.problem import ElementwiseProblem
 
 
+def take_first(x, n_required, name):
+    """
+        The first n_required coordinates of x. A problem with a fixed number of variables ignores
+        any extra ones, but cannot run with fewer.
+    """
+    x = np.asarray(x, dtype = float).ravel()
+    if x.size < n_required:
+        raise ValueError(f"{name} needs at least {n_required} variables, got {x.size}")
+    return x[:n_required]
+
+
 # =============================== Base Class ===============================
 class Problem(ElementwiseProblem):
     def __init__(self, name: str = None, **kwargs):
@@ -104,6 +115,143 @@ class DTLZ2(Problem):
         X = np.full((n_points, self.n_dim), 0.5)
         X[:, :self.n_obj - 1] = rng.random((n_points, self.n_obj - 1))
         return X
+
+
+
+# =============================== Kursawe Problems ===============================
+class Kursawe(Problem):
+    """
+    The PF can only be obtained analytically iff #dec_variables = 3
+    See: https://al-roomi.org/benchmarks/multi-objective/unconstrained-list/322-kursawe-s-function-kur
+    """
+    N_VAR = 3
+    def __init__(self, n_dim: int = 3):
+        if n_dim < self.N_VAR:
+            raise ValueError(f"Kursawe needs at least {self.N_VAR} variables, got {n_dim}")
+
+        # always the 3 variable problem - a larger n_dim is dropped by take_first() below
+        super().__init__("kursawe")
+
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out["F"] = self.inner.evaluate(take_first(x, self.N_VAR, "Kursawe"))
+
+
+
+# =============================== Schaffer Problems ===============================
+class Sch1(ElementwiseProblem):
+    """
+    Adopted from: https://al-roomi.org/benchmarks/multi-objective/unconstrained-list/319-schaffer-s-function-no-1-sch1
+    The PF can only be obtained analytically iff #dec_variables = 1
+
+    A: user-defined bound
+    """
+    N_VAR = 1
+
+    def __init__(self, n_dim = 1, A: float = 1e5):
+        if n_dim < self.N_VAR:
+            raise ValueError(f"Sch1 needs at least {self.N_VAR} variable, got {n_dim}")
+
+        # always the 1 variable problem - a larger n_dim is dropped by take_first() below
+        super().__init__(n_var = self.N_VAR, n_obj = 2, xl = -A, xu = A)
+        self.n_dim = self.N_VAR
+
+
+    def _objectives(self, x):
+        "one point -> one objective vector"
+        x = float(take_first(x, self.N_VAR, "Sch1")[0])
+        return np.array([x ** 2, (x - 2) ** 2], dtype = float)
+
+
+    def _evaluate(self, x, out):
+        out["F"] = self._objectives(x)
+
+
+    def pareto_set(self, n_points = 300):
+        X = np.zeros((n_points, self.n_dim))
+        X[:, 0] = np.linspace(0.0, 2.0, n_points)
+        return X
+
+
+    def pareto_front(self, n_points = 300):
+        return np.array([self._objectives(x) for x in self.pareto_set(n_points)])
+
+
+
+class Sch2(ElementwiseProblem):
+    """
+    Adopted from: https://al-roomi.org/benchmarks/multi-objective/unconstrained-list/320-schaffer-s-function-no-2-sch2
+    The PF can only be obtained analytically iff #dec_variables = 1
+    """
+    N_VAR = 1
+
+    def __init__(self, n_dim = 1):
+        if n_dim < self.N_VAR:
+            raise ValueError(f"Sch2 needs at least {self.N_VAR} variable, got {n_dim}")
+
+        # always the 1 variable problem - a larger n_dim is dropped by take_first() below
+        super().__init__(n_var = self.N_VAR, n_obj = 2, xl = -5, xu = 10)
+        self.n_dim = self.N_VAR
+
+
+    def _objectives(self, x):
+        x = float(take_first(x, self.N_VAR, "Sch2")[0])
+        if x <= 1:   f1 = -x
+        elif x < 3:  f1 = x - 2
+        elif x <= 4: f1 = 4 - x
+        else:        f1 = x - 4
+        return np.array([f1, (x - 5) ** 2], dtype = float)
+
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out["F"] = self._objectives(x)
+
+
+    def pareto_set(self, n_points = 300):
+        # the set is the union of [1, 2] and [4, 5]
+        half = n_points // 2
+        X = np.zeros((n_points, self.n_dim))
+        X[:, 0] = np.concatenate([np.linspace(1.0, 2.0, half),
+                                  np.linspace(4.0, 5.0, n_points - half)])
+        return X
+
+
+    def pareto_front(self, n_points = 300):
+        return np.array([self._objectives(x) for x in self.pareto_set(n_points)])
+
+
+
+# =============================== Fonseca–Fleming Problems ===============================
+class Fon(ElementwiseProblem):
+    """
+    Adopted from: https://al-roomi.org/benchmarks/multi-objective/unconstrained-list/321-fonseca-fleming-s-function-fon
+    """
+    def __init__(self, n_dim: int = 10):
+        self.n_dim = n_dim
+        super().__init__(n_var = n_dim, n_obj = 2,
+                         xl = np.ones(n_dim) * -4, xu = np.ones(n_dim) * 4)
+
+
+    def _objectives(self, x):
+        x = np.asarray(x, dtype = float).ravel()
+        tmp = 1 / np.sqrt(self.n_dim)
+        return np.array([1 - np.exp(-np.sum(np.square(x - tmp))),
+                         1 - np.exp(-np.sum(np.square(x + tmp)))], dtype = float)
+
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out["F"] = self._objectives(x)
+
+
+    def pareto_set(self, n_points = 300):
+        # xi in [-1/sqrt(n), 1/sqrt(n)]
+        t = 1 / np.sqrt(self.n_dim)
+        return np.repeat(np.linspace(-t, t, n_points)[:, None], self.n_dim, axis = 1)
+
+
+    def pareto_front(self, n_points = 300):
+        return np.array([self._objectives(x) for x in self.pareto_set(n_points)])
+
 
 
 # =============================== Self-constructed Problems ===============================
