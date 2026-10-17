@@ -26,7 +26,7 @@ def evaluate(models_arr: List[BaseModel]):
         return A[np.all(np.isfinite(A), 1)]
 
 
-    def find_nadir(in_space: str = "objective"):
+    def find_nadir(in_space: str = "objective", use_all: bool = False):
         """
             Use model.obj_hist / model.dec_hist to find nadir point
 
@@ -34,10 +34,18 @@ def evaluate(models_arr: List[BaseModel]):
                 in_space: str, default = "objective". Possible values: "objective", "decision"
         """
         # worst value per objective over every evaluation any model made, so the reference is shared and the hypervolumes compare
-        if in_space == "objective":
-            H = np.vstack([finite(m.obj_hist) for m in models_arr])
+        if use_all:
+            # Use all evaluated points to find the nadir
+            if in_space == "objective":
+                H = np.vstack([finite(m.obj_hist) for m in models_arr])
+            else:
+                H = np.vstack([finite(m.dec_hist) for m in models_arr])
         else:
-            H = np.vstack([finite(m.dec_hist) for m in models_arr])
+            # Only use the non-dominated points to find the nadir
+            if in_space == "objective":
+                H = np.vstack([finite(m.PF) for m in models_arr])
+            else:
+                H = np.vstack([finite(m.PS) for m in models_arr])
         return H.max(0)
 
 
@@ -130,6 +138,10 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
 
         model                any BaseModel, after solve()
 
+        More than 3 objectives cannot be scattered, so EVERY kind falls back to pymoo's radar
+        plot, whatever was asked for: one panel per solution, over 5 points taken evenly from
+        the archive and 5 from the analytical front.
+
         kind:
             "objective"  every evaluation (obj_hist) with the non-dominated archive (PF) highlighted and the true front behind them
 
@@ -167,7 +179,7 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
 
     try:            # analytical front, when the test problem defines one
         true = np.atleast_2d(model.problem.pareto_front())
-    except (AttributeError, NotImplementedError):
+    except Exception:   # pymoo raises a bare Exception for DTLZ past 3 objectives
         true = None
     if only_true and true is None:
         raise RuntimeError(f"{type(model.problem).__name__} has no analytical Pareto front")
@@ -196,6 +208,65 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
         zlo, zhi = box.min(0), box.max(0)
         pad = 0.05 * np.where(zhi > zlo, zhi - zlo, 1.0)
         zlo, zhi = zlo - pad, zhi + pad
+
+    # ---- more than 3 objectives: pymoo's radar, whatever kind was asked for ----
+    if dim > 3:
+        from pymoo.visualization.radar import Radar
+        from pymoo.visualization.util import get_circle_points
+
+        def sample(Q, n = 5):
+            "n points spread evenly through Q - radar draws one panel per solution"
+            Q = np.atleast_2d(Q)
+            return Q if len(Q) <= n else Q[np.linspace(0, len(Q) - 1, n).astype(int)]
+
+        sets = [] if only_true else [("non-dominated", sample(front), "crimson")]
+        if true is not None and (show_true or only_true):
+            sets.append(("true PF", sample(true), "0.6"))
+        if not sets or not len(sets[0][1]):
+            raise RuntimeError("Nothing to visualise yet - call solve() first")
+
+        Q = np.vstack([q for _, q, _ in sets])
+        lo, hi = Q.min(0), Q.max(0)
+        hi = np.where(hi > lo, hi, lo + 1.0)        # a flat objective would normalise to 0/0
+
+        # pymoo writes the same title on every panel, so name each panel instead and head the
+        # figure once; the figure has to grow with the panel count or the labels collide
+        n_cols = max(len(q) for _, q, _ in sets)
+        titles = [t for label, q, _ in sets
+                  for t in [f"{label} {i + 1}" for i in range(len(q))] + [""] * (n_cols - len(q))]
+        radar = Radar(bounds = [lo, hi], labels = plain, title = titles,
+                      figsize = (2.6 * n_cols, 3.0 * len(sets)), tight_layout = True)
+        for _, q, colour in sets:
+            radar.add(q, color = colour, alpha = 0.5)
+        radar.do()
+
+        V = get_circle_points(dim)
+        for ax, t in zip(np.array(radar.ax).ravel(), titles):
+            # pymoo's plot_axes_lines/plot_radar_line take an ax but draw with plt.plot, so every
+            # panel's spokes land on the last axes - clear them and draw each panel's own
+            for line in list(ax.lines):
+                line.remove()
+            for x, y in V:
+                ax.plot([0, x], [0, y], color = "black", lw = 0.5, alpha = 0.75)
+            ax.plot(*np.vstack([V, V[:1]]).T, color = "black", lw = 0.5, alpha = 0.75)
+
+            # the panels must share one frame, and pymoo leaves the aspect on datalim, which
+            # silently overrides any limit set here
+            ax.set_aspect("equal", adjustable = "box")
+            ax.set_xlim(-1.3, 1.3)
+            ax.set_ylim(-1.3, 1.3)
+            for label in ax.texts:                  # pymoo sets the size itself, so shrink after
+                label.set_fontsize(8)
+            ax.set_title(t, fontsize = 9)
+            if not t:                               # a set shorter than the widest one
+                ax.axis("off")
+        radar.fig.suptitle(f"{type(model.problem).__name__} - objective space ({dim} objectives)",
+                           fontsize = 12, y = 1.02)
+
+        if show:
+            plt.show()
+        return radar.fig
+
 
     # ---- the learning process, one plotly animation frame per iteration ----
     if kind == "learning":
