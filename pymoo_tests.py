@@ -1,8 +1,13 @@
+from typing import List, Any
 import numpy as np
 from pymoo.problems import get_problem
 from pymoo.core.problem import ElementwiseProblem
 
 
+
+# ========================================================================================
+# ======================================= Helpers ========================================
+# ========================================================================================
 def take_first(x, n_required, name):
     """
         The first n_required coordinates of x. A problem with a fixed number of variables ignores
@@ -21,7 +26,10 @@ def to_domain(x, lo, hi):
     return lo + (hi - lo) * np.asarray(x, dtype = float)
 
 
-# =============================== Base Class ===============================
+
+# ========================================================================================
+# ====================================== Base Class ======================================
+# ========================================================================================
 class Problem(ElementwiseProblem):
     def __init__(self, name: str = None, **kwargs):
         if name is None:
@@ -44,6 +52,96 @@ class Problem(ElementwiseProblem):
     def pareto_set(self, n_points = 300):
         raise NotImplementedError("The true Pareto set of this problem is not known")
 
+
+
+class ExtendedProblem(ElementwiseProblem):
+    """
+        This class offers a means to combine different test problems in any possible permutation.
+        The objectives of every problem given are concatenated, in the order the list has them, and
+        `order` then picks and reorders that vector, or a subset of the objectives.
+
+        Note: Not all test problems use the same number of decision variables, we shall use the first few decision variables
+        if the problem requires fewer. However, we do not permit passing a decision vector whose dimensionality is lower than
+        the minimum of the test problems in the given list
+
+        Parameters:
+            problems (list[ElementwiseProblem]): Optimization problems used to construct
+                the decision space. Every one of them is searched on the unit box.
+
+            order (list, optional): which objectives of the combined vector to keep, and in which
+                order. Defaults to all of objectives in the given problems.
+    """
+    def __init__(self, problems: List[ElementwiseProblem] | None = None, order: List | None = None, **kwargs):
+        if problems is None:
+            raise ValueError("No problems are given")
+
+        if not list(problems):
+            raise ValueError("No problems are given")
+        self.problems = self._build(problems)
+
+        # the decision space has to serve the highest dimensional problem; the others take the first few
+        self.n_dim = max(p.n_var for p in self.problems)
+        n_obj = sum(p.n_obj for p in self.problems)     # the combined objective vector
+
+        self.order = np.arange(n_obj) if order is None else np.asarray(order, dtype = int)  # any permutation of 0..n_obj-1
+        if np.any(self.order < 0) or np.any(self.order >= n_obj):
+            raise ValueError(f"order entries must be in [0, {n_obj})")
+        if len(set(self.order.tolist())) != len(self.order):
+            raise ValueError("order must not repeat indices")
+
+        super().__init__(n_var = self.n_dim, n_obj = len(self.order), xl = 0.0, xu = 1.0)
+
+
+    @staticmethod
+    def _build(problems):
+        """
+            Turn the list into instances. A class stands for an instance of itself only when its
+            own definition fixes its size; anything else has to be constructed, so that a decision
+            space is never set by default.
+        """
+        out = []
+        for p in problems:
+            if not isinstance(p, type):             # already an instance, left alone
+                out.append(p)
+            elif getattr(p, "N_VAR", None):         # its own definition fixes the size
+                out.append(p())
+            else:
+                raise ValueError(
+                    f"{p.__name__}'s decision space is not fixed by its definition - construct it "
+                    f"with a size, as {p.__name__}(n_dim = ...)")
+        return out
+
+
+    def _objectives(self, x):
+        "one point of the unit box -> every problem's objectives, concatenated and then reordered"
+        x = np.asarray(x, dtype = float).ravel()
+        F = [np.asarray(p.evaluate(take_first(x, p.n_var, type(p).__name__)), float).ravel()
+             for p in self.problems]
+        return np.concatenate(F)[self.order]
+
+
+    def _evaluate(self, x, out):
+        if len(x) < self.n_dim:
+            raise ValueError(f"The given decision vector must have higher dimensionality than {self.n_dim}")
+        out["F"] = self._objectives(x)
+
+
+    def pareto_front(self, n_points = 300):
+        raise NotImplementedError("Extended problem - no analytical PF")
+
+
+
+# =========================================================================================
+# =============================== Single-objective Problems ===============================
+# =========================================================================================
+# Aim: combine with other test problems to form a MOP
+
+
+
+
+# ========================================================================================
+# =============================== Multi-objective Problems ===============================
+# ========================================================================================
 
 # =============================== ZDT Problems ===============================
 class ZDT1(Problem):
