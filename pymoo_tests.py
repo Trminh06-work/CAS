@@ -14,6 +14,13 @@ def take_first(x, n_required, name):
     return x[:n_required]
 
 
+def to_domain(x, lo, hi):
+    """
+        x in [0, 1] -> the function's own domain [lo, hi].
+    """
+    return lo + (hi - lo) * np.asarray(x, dtype = float)
+
+
 # =============================== Base Class ===============================
 class Problem(ElementwiseProblem):
     def __init__(self, name: str = None, **kwargs):
@@ -132,9 +139,14 @@ class Kursawe(Problem):
         # always the 3 variable problem - a larger n_dim is dropped by take_first() below
         super().__init__("kursawe")
 
+        # searched on the unit box; kursawe's own [-5, 5] is applied in _evaluate
+        self.lo, self.hi = float(self.inner.xl[0]), float(self.inner.xu[0])
+        self.xl, self.xu = np.zeros(self.N_VAR), np.ones(self.N_VAR)
+
 
     def _evaluate(self, x, out, *args, **kwargs):
-        out["F"] = self.inner.evaluate(take_first(x, self.N_VAR, "Kursawe"))
+        z = to_domain(take_first(x, self.N_VAR, "Kursawe"), self.lo, self.hi)
+        out["F"] = self.inner.evaluate(z)
 
 
 
@@ -151,16 +163,19 @@ class Sch1(ElementwiseProblem):
     def __init__(self, n_dim = 1, A: float = 1e5):
         if n_dim < self.N_VAR:
             raise ValueError(f"Sch1 needs at least {self.N_VAR} variable, got {n_dim}")
+        if A <= 0:
+            raise ValueError("A must be a positive real number")
 
         # always the 1 variable problem - a larger n_dim is dropped by take_first() below
-        super().__init__(n_var = self.N_VAR, n_obj = 2, xl = -A, xu = A)
+        super().__init__(n_var = self.N_VAR, n_obj = 2, xl = 0.0, xu = 1.0)
         self.n_dim = self.N_VAR
+        self.lo, self.hi = -A, A        # the function's own domain, applied in _objectives
 
 
     def _objectives(self, x):
-        "one point -> one objective vector"
-        x = float(take_first(x, self.N_VAR, "Sch1")[0])
-        return np.array([x ** 2, (x - 2) ** 2], dtype = float)
+        "one point of the unit box -> one objective vector"
+        z = float(to_domain(take_first(x, self.N_VAR, "Sch1"), self.lo, self.hi)[0])
+        return np.array([z ** 2, (z - 2) ** 2], dtype = float)
 
 
     def _evaluate(self, x, out):
@@ -169,7 +184,7 @@ class Sch1(ElementwiseProblem):
 
     def pareto_set(self, n_points = 300):
         X = np.zeros((n_points, self.n_dim))
-        X[:, 0] = np.linspace(0.0, 2.0, n_points)
+        X[:, 0] = (np.linspace(0.0, 2.0, n_points) - self.lo) / (self.hi - self.lo)
         return X
 
 
@@ -190,12 +205,13 @@ class Sch2(ElementwiseProblem):
             raise ValueError(f"Sch2 needs at least {self.N_VAR} variable, got {n_dim}")
 
         # always the 1 variable problem - a larger n_dim is dropped by take_first() below
-        super().__init__(n_var = self.N_VAR, n_obj = 2, xl = -5, xu = 10)
+        super().__init__(n_var = self.N_VAR, n_obj = 2, xl = 0.0, xu = 1.0)
         self.n_dim = self.N_VAR
+        self.lo, self.hi = -5.0, 10.0   # the function's own domain, applied in _objectives
 
 
     def _objectives(self, x):
-        x = float(take_first(x, self.N_VAR, "Sch2")[0])
+        x = float(to_domain(take_first(x, self.N_VAR, "Sch2"), self.lo, self.hi)[0])
         if x <= 1:   f1 = -x
         elif x < 3:  f1 = x - 2
         elif x <= 4: f1 = 4 - x
@@ -210,9 +226,9 @@ class Sch2(ElementwiseProblem):
     def pareto_set(self, n_points = 300):
         # the set is the union of [1, 2] and [4, 5]
         half = n_points // 2
+        z = np.concatenate([np.linspace(1.0, 2.0, half), np.linspace(4.0, 5.0, n_points - half)])
         X = np.zeros((n_points, self.n_dim))
-        X[:, 0] = np.concatenate([np.linspace(1.0, 2.0, half),
-                                  np.linspace(4.0, 5.0, n_points - half)])
+        X[:, 0] = (z - self.lo) / (self.hi - self.lo)       # pre-image in the unit box
         return X
 
 
@@ -229,14 +245,15 @@ class Fon(ElementwiseProblem):
     def __init__(self, n_dim: int = 10):
         self.n_dim = n_dim
         super().__init__(n_var = n_dim, n_obj = 2,
-                         xl = np.ones(n_dim) * -4, xu = np.ones(n_dim) * 4)
+                         xl = np.zeros(n_dim), xu = np.ones(n_dim))
+        self.lo, self.hi = -4.0, 4.0    # the function's own domain, applied in _objectives
 
 
     def _objectives(self, x):
-        x = np.asarray(x, dtype = float).ravel()
+        z = to_domain(np.asarray(x, dtype = float).ravel(), self.lo, self.hi)
         tmp = 1 / np.sqrt(self.n_dim)
-        return np.array([1 - np.exp(-np.sum(np.square(x - tmp))),
-                         1 - np.exp(-np.sum(np.square(x + tmp)))], dtype = float)
+        return np.array([1 - np.exp(-np.sum(np.square(z - tmp))),
+                         1 - np.exp(-np.sum(np.square(z + tmp)))], dtype = float)
 
 
     def _evaluate(self, x, out, *args, **kwargs):
@@ -244,9 +261,10 @@ class Fon(ElementwiseProblem):
 
 
     def pareto_set(self, n_points = 300):
-        # xi in [-1/sqrt(n), 1/sqrt(n)]
+        # zi in [-1/sqrt(n), 1/sqrt(n)]; the set is its pre-image in the unit box
         t = 1 / np.sqrt(self.n_dim)
-        return np.repeat(np.linspace(-t, t, n_points)[:, None], self.n_dim, axis = 1)
+        z = np.linspace(-t, t, n_points)
+        return np.repeat(((z - self.lo) / (self.hi - self.lo))[:, None], self.n_dim, axis = 1)
 
 
     def pareto_front(self, n_points = 300):
