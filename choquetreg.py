@@ -324,7 +324,8 @@ class ChoquetReg:
             case 2:
                 return self.dim*self.Choquet2add(self.dim,xtnp,self.v)+ self.b_int # self.dim*fm.Choquet2addMob(xt, self.v, self.dim) + self.b_int
             case 3:
-                return self.dim*fm.ChoquetKinter(xtnp, self.v, self.kint, self.env) + self.b_int
+                # return self.dim*fm.ChoquetKinter(xtnp, self.v, self.kint, self.env) + self.b_int
+                return self.dim*fm.Choquet(xtnp, self.v, self.env) + self.b_int # Gleb's fix
             case 4:
                 return self.dim*fm.OWA(xtnp, self.v, self.env) + self.b_int
 
@@ -373,6 +374,15 @@ class ChoquetReg:
                 raise ValueError(f"Unknown method: {self.method}")
 
     def fit_choquet(self, X, y, use_intercept=True, kadd=2, method=0, enforceone=True):
+        # Fix as Gleb recommended
+        if method == 3:
+            if X.shape[1] == 2: # ask again if n = 2 means n_obj = 2?
+                method = 2
+            elif X.shape[1] == 3:
+                kadd = 1
+            else:
+                kadd = 2
+
         X, y = np.asarray(X, dtype=np.float64), np.asarray(y, dtype=np.float64)
         self.w_vec, self.b_int = self.fit_closed_form(X, y, use_intercept)
 
