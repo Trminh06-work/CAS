@@ -13,7 +13,7 @@ import time
 class BaseModel(ABC):
     def __init__(self,
         problem: Problem = None, random_state: int = 42, w0: np.ndarray = None,
-        max_iter: int = 50, tol: float = 1e-6, solver: str = "L-BFGS-B"
+        max_iter: int = 50, tol: float = 1e-3, solver: str = "L-BFGS-B"
     ):
         if problem is None:
             raise ValueError("Problem is not specified")
@@ -40,6 +40,8 @@ class BaseModel(ABC):
         # self.n_filtered: int = 0                # evaluations already folded into the archive
 
         self.iter_hist: np.ndarray = np.empty(0, dtype = int)   # iteration index of each evaluation
+        self.scal_hist: list = []               # scalarised value at each evaluation, as the solver saw it
+        self.pf_hist: dict = {}                 # iteration -> mask of obj_hist that filter_PF_PS() kept
         self.iteration: int = 0                 # current outer iteration
 
         # Termination criteria
@@ -109,6 +111,7 @@ class BaseModel(ABC):
         self.w_hist = w[None, :] if self.w_hist is None else np.vstack([self.w_hist, w])
 
         self.iter_hist = np.append(self.iter_hist, self.iteration)
+        self.scal_hist.append(F_val)
         self.num_func_eval += 1     # Save total function evaluations
         return F_val
 
@@ -156,6 +159,7 @@ class BaseModel(ABC):
         """
         # Follow the Pareto optimality definition
         keep = self.non_dominated(self.obj_hist)
+        self.pf_hist[self.iteration] = keep     # what learn_weight() is handed at the next iteration
         self.PF, self.PS = self.obj_hist[keep], self.dec_hist[keep]
         self._worst = np.max(self.PF, axis = 0)
 
@@ -209,7 +213,7 @@ class BaseModel(ABC):
                         bounds = bounds, maxiter = self.max_iter * 10)
             else:
                 # Other NLP solvers
-                for _ in range(self.max_iter):
+                for _ in range(5 * self.PS_dim):
                     x = lo + (hi - lo) * self.rng.random(self.PS_dim)            # random intial point for solver
                     minimize(self.F, x, args = (self.w,), method = self.solver,  # solve using scalarised F
                             bounds = bounds, tol = self.tol, options={'maxiter': 50})
