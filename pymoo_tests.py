@@ -1,4 +1,4 @@
-from typing import List, Any
+from typing import List
 import numpy as np
 from pymoo.problems import get_problem
 from pymoo.core.problem import ElementwiseProblem
@@ -24,6 +24,13 @@ def to_domain(x, lo, hi):
         x in [0, 1] -> the function's own domain [lo, hi].
     """
     return lo + (hi - lo) * np.asarray(x, dtype = float)
+
+
+
+class Aggregator:
+    @staticmethod
+    def add(problems: List[ElementwiseProblem]):
+        pass
 
 
 
@@ -88,6 +95,8 @@ class ExtendedProblem(ElementwiseProblem):
             raise ValueError(f"order entries must be in [0, {n_obj})")
         if len(set(self.order.tolist())) != len(self.order):
             raise ValueError("order must not repeat indices")
+        if len(self.order) < 2:
+            raise ValueError("order must have at least 2 indices")
 
         super().__init__(n_var = self.n_dim, n_obj = len(self.order), xl = 0.0, xu = 1.0)
 
@@ -135,7 +144,125 @@ class ExtendedProblem(ElementwiseProblem):
 # =============================== Single-objective Problems ===============================
 # =========================================================================================
 # Aim: combine with other test problems to form a MOP
+# Source: https://arxiv.org/abs/1308.4008
+# adopted from scipy: https://github.com/scipy/scipy/tree/e1a7f5e4239c32a0415c3368f7969b93feddfee2/benchmarks/benchmarks/go_benchmark_functions
 
+class SOP(ElementwiseProblem):
+    """
+        Base for the single-objective problems.
+
+        A subclass sets
+            self.lo, self.hi        the function's own domain, applied in _objectives
+            self.global_optimum     its known minimisers, in its own domain (as scipy lists them)
+            self.fglob              its global minimum
+        and implements fun(z) on its own domain.
+    """
+    def __init__(self, n_dim: int = 10):
+        self.n_dim = n_dim
+        super().__init__(n_var = n_dim, n_obj = 1,
+                         xl = np.zeros(n_dim), xu = np.ones(n_dim))
+
+
+    def fun(self, z):
+        raise NotImplementedError("The benchmark function is not defined")
+
+
+    def _objectives(self, x):
+        "one point of the unit box -> a one-objective vector"
+        z = to_domain(take_first(x, self.n_var, type(self).__name__), self.lo, self.hi)
+        return np.array([self.fun(z)], dtype = float)
+
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out["F"] = self._objectives(x)
+
+
+    def pareto_set(self, n_points = 300):
+        # with one objective the set is the global minimisers; their pre-image in the unit box
+        return (np.asarray(self.global_optimum, dtype = float) - self.lo) / (self.hi - self.lo)
+
+
+    def pareto_front(self, n_points = 300):
+        return np.full((len(self.global_optimum), 1), self.fglob)
+
+
+
+class Ackley01(SOP):
+    """
+    Ackley 1, No. 1 in Jamil & Yang. Adopted from scipy's Ackley01
+    Continuous, differentiable, non-separable, scalable, multimodal
+
+        f(z) = -20 exp(-0.2 sqrt(sum(zi^2) / n)) - exp(sum(cos(2 pi zi)) / n) + 20 + e,   zi in [-35, 35]
+
+    Global optimum: f = 0 at z = (0, ..., 0), the centre of the unit box
+    Note: the paper prints -0.02 in the first exponent; scipy and Ackley's original use -0.2
+    """
+    def __init__(self, n_dim: int = 10):
+        super().__init__(n_dim)
+        self.lo, self.hi = -35.0, 35.0
+        self.global_optimum = [[0.0] * n_dim]
+        self.fglob = 0.0
+
+
+    def fun(self, z):
+        return (-20.0 * np.exp(-0.2 * np.sqrt(np.sum(z ** 2) / self.n_dim))
+                - np.exp(np.sum(np.cos(2 * np.pi * z)) / self.n_dim) + 20.0 + np.e)
+
+
+
+class Schwefel04(SOP):
+    """
+    Schwefel 2.4, No. 120 in Jamil & Yang. Adopted from scipy's Schwefel04
+    Continuous, differentiable, non-separable, scalable
+
+        f(z) = sum_{i=1}^{n} [(zi - 1)^2 + (z1 - zi^2)^2],   zi in [0, 10]
+
+    Global optimum: f = 0 at z = (1, ..., 1), i.e. 0.1 in the unit box
+    """
+    def __init__(self, n_dim: int = 10):
+        super().__init__(n_dim)
+        self.lo, self.hi = 0.0, 10.0
+        self.global_optimum = [[1.0] * n_dim]
+        self.fglob = 0.0
+
+
+    def fun(self, z):
+        return np.sum((z - 1.0) ** 2 + (z[0] - z ** 2) ** 2)
+
+
+
+class Gulf(SOP):
+    """
+    Gulf Research Problem, No. 60 in Jamil & Yang. Adopted from scipy's Gulf
+    Continuous, differentiable, non-separable, non-scalable, multimodal
+
+        f(z) = sum_{i=1}^{99} [exp(-|ui - z2|^z3 / z1) - i / 100]^2,   zi in [0, 50]
+        ui   = 25 + (-50 ln(i / 100))^(2/3)
+
+    Global optimum: f = 0 at z = (50, 25, 1.5), i.e. (1, 0.5, 0.03) in the unit box
+    Note: scipy takes |ui - z2|
+    """
+    N_VAR = 3
+
+    def __init__(self, n_dim: int = 3):
+        if n_dim < self.N_VAR:
+            raise ValueError(f"Gulf needs at least {self.N_VAR} variables, got {n_dim}")
+
+        # always the 3 variable problem - a larger n_dim is dropped by take_first() in _objectives
+        super().__init__(self.N_VAR)
+        self.lo, self.hi = 0.0, 50.0
+        self.global_optimum = [[50.0, 25.0, 1.5]]
+        self.fglob = 0.0
+
+        self.t = np.arange(1.0, 100.0) / 100                 # ti = i / 100, i = 1, ..., 99
+        self.u = 25 + (-50 * np.log(self.t)) ** (2 / 3)
+
+
+    def fun(self, z):
+        a = np.abs(self.u - z[1]) ** z[2]
+        # at z1 = 0 take the limit z1 -> 0+: a / z1 -> inf, but stays 0 where a = 0
+        r = a / z[0] if z[0] > 0 else np.where(a > 0, np.inf, 0.0)
+        return np.sum((np.exp(-r) - self.t) ** 2)
 
 
 
