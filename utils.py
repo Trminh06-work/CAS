@@ -57,7 +57,8 @@ def evaluate(models_arr: List[BaseModel]):
             Number of function evaluations
         """
         from pymoo.indicators.hv import HV
-        hv = HV(ref_point = find_nadir(in_space = "objective"))
+        nadir = find_nadir(in_space = "objective")
+        hv = HV(ref_point = nadir)
         rows = [
             dict(
                 hypervolume = hv(finite(m.PF)),
@@ -69,10 +70,62 @@ def evaluate(models_arr: List[BaseModel]):
             )
             for m in models_arr
         ]
-        return pd.DataFrame(rows, index = [type(m).__name__ for m in models_arr])
+        table = pd.DataFrame(rows, index = [type(m).__name__ for m in models_arr])
+        # the hypervolumes above mean nothing without the box they were measured in - keep it with
+        # them, so it can be saved and passed to HV(ref_point = ...) to compare a later run
+        table.attrs["nadir"] = nadir
+        return table
 
 
     return summary()
+
+
+
+def trace_log(model: BaseModel, max_rows: int = None, path: str = None) -> str:
+    """
+        Write a readable trace of one solved model: for each outer iteration, the non-dominated
+        points learn_weight() was given, what it learnt from them, and the evaluations the solver
+        then made with the value of the scalarising function there.
+
+        The scalarised values are the ones recorded as the solver saw them (model.scal_hist) and
+        each iteration's archive is the mask filter_PF_PS() kept (model.pf_hist).
+        max_rows caps the points listed per iteration; None writes all of them.
+    """
+    path = path or f"trace_{type(model).__name__}_{type(model.problem).__name__}.log"
+    obj, dec = np.atleast_2d(model.obj_hist), np.atleast_2d(model.dec_hist)
+    W = np.atleast_2d(model.w_hist)
+    iters, scal = np.asarray(model.iter_hist), np.asarray(model.scal_hist, dtype = float)
+    names = [f"f{i + 1}" for i in range(model.PF_dim)]
+
+    with open(path, "w") as fh:
+        fh.write(f"{type(model).__name__} on {type(model.problem).__name__} - "
+                 f"seed {model.random_state}, {model.num_func_eval} evaluations\n")
+
+        for it in np.unique(iters):
+            rows = (iters == it)
+            table = pd.DataFrame(obj[rows], columns = names)
+            table["scalarised"] = scal[rows]
+            table.insert(0, "x", [np.array2string(x, precision = 4, separator = ",",
+                                                  max_line_width = np.inf) for x in dec[rows]])
+
+            fh.write(f"\n=== iteration {int(it)}: {int(rows.sum())} evaluations, w = {W[rows][0]}\n")
+
+            keep = model.pf_hist.get(int(it) - 1)   # the archive learn_weight() was handed here
+            if keep is not None:
+                pf_it, scal_it = obj[:len(keep)][keep], scal[:len(keep)][keep]
+                u = model.state_hist[int(it)]["worst"] - pf_it
+                fit = pd.DataFrame(np.hstack([pf_it, u]),
+                                   columns = names + [f"u{i + 1}" for i in range(model.PF_dim)])
+                fit["scalarised"] = scal_it         # the value each one had when it was found
+                fh.write(f"  learn_weight input: {len(pf_it)} non-dominated points\n")
+                fh.write(fit.head(max_rows).to_string(index = False) + "\n")
+
+            for key, value in model.state_hist.get(int(it), {}).items():
+                if key == "slip" and value is not None:     # the object is not readable on its own
+                    value = f"{value.type}, {value.npts} points, LC = {value.LipsConst:.6g}"
+                fh.write(f"  {key:10s}: {value}\n")
+            fh.write(table.head(max_rows).to_string(index = False) + "\n")
+    return path
 
 
 
