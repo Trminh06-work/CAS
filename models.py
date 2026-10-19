@@ -43,6 +43,7 @@ class BaseModel(ABC):
         self.scal_hist: list = []               # scalarised value at each evaluation, as the solver saw it
         self.pf_hist: dict = {}                 # iteration -> mask of obj_hist that filter_PF_PS() kept
         self.iteration: int = 0                 # current outer iteration
+        self.wallclock_time: float = np.nan     # seconds in solve(); stays nan unless it finished
 
         # Termination criteria
         self.max_iter: int = max_iter
@@ -222,7 +223,6 @@ class BaseModel(ABC):
             self.filter_PF_PS()
 
         self.wallclock_time = time.perf_counter() - start
-
 
 
     def visualise(self, *args, **kwargs):

@@ -16,7 +16,7 @@
         hv_rank     : ranking of models according to `hypervolume`  (after running --aggregate)
         hv_models   : number of models involved in HV calculation   (after running --aggregate)
 """
-import argparse, inspect, io, contextlib, glob, os, sys, time, traceback
+import argparse, inspect, io, contextlib, glob, os, sys, traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))        # the models live one level up
@@ -134,7 +134,6 @@ def run(task, conf, results_dir, logs_dir = None, trace_rows = 50):
     if problem.n_obj != n_obj:
         row["status"] = f"n_obj mismatch: grid says {n_obj}, {problem_name} builds {problem.n_obj}"
 
-    started = time.perf_counter()
     try:
         with contextlib.redirect_stdout(io.StringIO()):      # the solvers print; keep the log clean
             model.solve()
@@ -142,7 +141,7 @@ def run(task, conf, results_dir, logs_dir = None, trace_rows = 50):
         row["status"] = f"{type(exc).__name__}: {exc}"[:200]
         traceback.print_exc()
 
-    row["wallclock"] = round(time.perf_counter() - started, 2)
+    row["wallclock"] = round(model.wallclock_time, 4)        # solve() times itself, failures too
     row["n_func_eval"], row["n_iter"] = int(model.num_func_eval), int(model.iteration)
     row["archive"], row["hv_own"] = 0, np.nan
 
