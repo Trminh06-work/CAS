@@ -2,8 +2,8 @@ from typing import List, Tuple, Dict, Type, Any
 import numpy as np
 import itertools, pandas as pd
 from models import LinearModel, ChoquetModel, LipschitzModel, BaseModel
-from pymoo_tests import ZDT1, ZDT2, ZDT3, DTLZ1, DTLZ2
-from pymoo_tests import Problem
+from tests import ZDT1, ZDT2, ZDT3, DTLZ1, DTLZ2
+from tests import Problem
 
 import matplotlib.pyplot as plt
 from utils import evaluate, visualise_weights, trace_log

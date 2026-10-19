@@ -3,7 +3,7 @@ from contextlib import contextmanager
 import numpy as np
 from scipy.optimize import minimize, nnls
 from scipy.optimize import direct
-from pymoo_tests import Problem
+from tests import Problem
 
 import pyfmtools as fm
 from choquetreg import ChoquetReg
