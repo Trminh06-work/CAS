@@ -16,7 +16,7 @@
         hv_rank     : ranking of models according to `hypervolume`  (after running --aggregate)
         hv_models   : number of models involved in HV calculation   (after running --aggregate)
 """
-import argparse, io, contextlib, glob, os, sys, time, traceback
+import argparse, inspect, io, contextlib, glob, os, sys, time, traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))        # the models live one level up
@@ -27,21 +27,22 @@ import models
 
 MODELS = {"baseline": "LinearModel", "cas": "ChoquetModel", "las": "LipschitzModel"}
 
-# Objectives fixed by a definition rather than by obj_dims; anything outside this table and outside
-# the dtlz group has two. Fixed variable counts are not listed here - the classes declare N_VAR.
-N_OBJ = {"ZDT2_Combined": 4}
-
 
 def read_conf(path):
-    "key = value lines; values are comma separated lists; # starts a comment"
-    conf = {}
+    conf, key = {}, None
     with open(path) as handle:
         for line in handle:
             line = line.split("#", 1)[0].strip()
             if not line:
                 continue
-            key, value = (part.strip() for part in line.split("=", 1))
-            conf[key] = [v.strip() for v in value.split(",") if v.strip()]
+            if "=" in line:
+                key, value = (part.strip() for part in line.split("=", 1))
+                conf[key] = []
+            elif key is None:
+                raise SystemExit(f"{path}: a value before any key: {line}")
+            else:
+                value = line
+            conf[key] += [v.strip() for v in value.split(",") if v.strip()]
     return conf
 
 
@@ -53,14 +54,21 @@ def combos(conf):
     return {k: v for k, v in conf.items() if k.startswith("combo_") and not k.endswith("_order")}
 
 
+def takes_n_obj(name, conf):
+    "whether the grid chooses this problem's objectives - true of DTLZ, false of a combination"
+    import tests
+    return (name not in combos(conf)
+            and "n_obj" in inspect.signature(getattr(tests, name)).parameters)
+
+
 def build_problem(name, n_dim, n_obj, conf):
-    "one problem instance: a combination, a DTLZ (the only group taking n_obj), or n_dim alone"
+    "one problem instance: a combination, one the grid sizes in both spaces, or n_dim alone"
     import tests
 
     parts = combos(conf).get(name)
     if parts is None:
         build = getattr(tests, name)
-        return build(n_dim = n_dim, n_obj = n_obj) if name in conf["dtlz"] else build(n_dim = n_dim)
+        return build(n_dim = n_dim, n_obj = n_obj) if takes_n_obj(name, conf) else build(n_dim = n_dim)
 
     joined = []
     for part in parts:      # a part fixing its own size goes in bare, the rest take this n_dim
@@ -72,27 +80,27 @@ def build_problem(name, n_dim, n_obj, conf):
 
 def tasks(conf):
     """
-        Every (model, problem, n_dim, n_obj, seed) the grid covers, in a fixed order.
-        Only DTLZ takes n_obj, and it requires n_dim > n_obj;
+        Every (model, problem, n_dim, n_obj, seed) the grid covers,
+        in the order the conf lists the problems.
+
+        - Problems with fixed n_dim: may take dec_dims in conf, but ignore during evaluations
+        - Problems with fixed n_obj: ignore obj_dims in conf
     """
     import tests                    # for the sizes the problem classes fix themselves
 
     dec_dims, obj_dims = ([int(v) for v in conf[k]] for k in ("dec_dims", "obj_dims"))
     seeds = [int(v) for v in conf["seeds"]]
-    problems = (conf["zdt"] + conf["dtlz"] + conf.get("extra", []) + conf.get("combined", [])
-                + list(combos(conf)))
 
     out = []
-    for problem in problems:
+    for problem in conf["problems"] + list(combos(conf)):
         parts = combos(conf).get(problem)
         sizes = [getattr(getattr(tests, p), "N_VAR", None) for p in (parts or [problem])]
         fixed = max(sizes) if all(sizes) else None
+        chosen = takes_n_obj(problem, conf)
         for n_dim in ([fixed] if fixed else dec_dims):
             # a combination's objectives are its parts' put together, so they are counted by building it
-            for n_obj in (obj_dims if problem in conf["dtlz"] else
-                          [build_problem(problem, n_dim, None, conf).n_obj] if parts else
-                          [N_OBJ.get(problem, 2)]):
-                if problem in conf["dtlz"] and n_dim <= n_obj:
+            for n_obj in (obj_dims if chosen else [build_problem(problem, n_dim, None, conf).n_obj]):
+                if chosen and n_dim <= n_obj:
                     continue
                 out += [(model, problem, n_dim, n_obj, seed)
                         for model in conf["models"] for seed in seeds]
