@@ -7,10 +7,14 @@
         python run_experiment.py --conf job.conf --aggregate   merge the rows -> results/summary.csv
 
     A task writes results/<model>_<problem>_d<n_dim>_m<n_obj>_s<seed>.{csv,npz} and the matching
-    logs/trace_<...>.log - what each iteration learnt and the evaluations it made. The row carries
-    hv_own, the hypervolume on that run's own front; the comparable one needs the reference point
-    the models of a seed share, so --aggregate adds it afterwards. A task that raises still
-    writes its row, with status = the exception, so one failure leaves no hole in the table.
+    logs/trace_<...>.log - what each iteration learnt and the evaluations it made.
+
+    5 pieces of information about Hypervolume:
+        hv_own      : the hypervolume on that run's own front       (after running a task, i.e. --index #)
+        hypervolume : comparable HV using one reference nadir point (after running --aggregate)
+        hv_ref      : the reference nadir point for `hypervolume`   (after running --aggregate)
+        hv_rank     : ranking of models according to `hypervolume`  (after running --aggregate)
+        hv_models   : number of models involved in HV calculation   (after running --aggregate)
 """
 import argparse, io, contextlib, glob, os, sys, time, traceback
 
@@ -19,6 +23,7 @@ sys.path.insert(0, os.path.join(HERE, ".."))        # the models live one level 
 
 import numpy as np
 import pandas as pd
+import models
 
 MODELS = {"baseline": "LinearModel", "cas": "ChoquetModel", "las": "LipschitzModel"}
 
@@ -43,8 +48,7 @@ def read_conf(path):
 def combos(conf):
     """
         combo_<name> = A, B, C in the conf is one ExtendedProblem joining those problems in that
-        order, and combo_<name>_order = 2, 0, 3 keeps and reorders its objectives. The key is the
-        problem's name everywhere else - in --list, and in the file names.
+        order, and combo_<name>_order = 2, 0, 3 keeps and reorders its objectives.
     """
     return {k: v for k, v in conf.items() if k.startswith("combo_") and not k.endswith("_order")}
 
@@ -68,11 +72,8 @@ def build_problem(name, n_dim, n_obj, conf):
 
 def tasks(conf):
     """
-        Every (model, problem, n_dim, n_obj, seed) the grid covers, in a fixed order,
-        extra and combined come last so that adding a problem renumbers nothing.
-        Only DTLZ takes n_obj, and it needs n_dim > n_obj;
-        a problem declaring N_VAR ignores the rest, so it is listed once,
-        and a combination does the same when every part of it does.
+        Every (model, problem, n_dim, n_obj, seed) the grid covers, in a fixed order.
+        Only DTLZ takes n_obj, and it requires n_dim > n_obj;
     """
     import tests                    # for the sizes the problem classes fix themselves
 
@@ -109,7 +110,6 @@ def finite(A):
 
 
 def run(task, conf, results_dir, logs_dir = None, trace_rows = 50):
-    import models as model_module
     from pymoo.indicators.hv import HV
 
     model_key, problem_name, n_dim, n_obj, seed = task
@@ -118,12 +118,12 @@ def run(task, conf, results_dir, logs_dir = None, trace_rows = 50):
     problem = build_problem(problem_name, n_dim, n_obj, conf)
     extra = (dict(method = int(conf["cas_method"][0])) if model_key == "cas" else
              dict(type = conf["las_type"][0]) if model_key == "las" else {})
-    model = getattr(model_module, MODELS[model_key])(
+    model = getattr(models, MODELS[model_key])(
         problem = problem, max_iter = max_iter, random_state = seed, **extra)
 
     row = dict(model = model_key, problem = problem_name, n_dim = n_dim, n_obj = n_obj, seed = seed,
                max_iter = max_iter, status = "ok")
-    if problem.n_obj != n_obj:      # the file name carries the grid's n_obj, so say so when it lies
+    if problem.n_obj != n_obj:
         row["status"] = f"n_obj mismatch: grid says {n_obj}, {problem_name} builds {problem.n_obj}"
 
     started = time.perf_counter()
@@ -140,14 +140,12 @@ def run(task, conf, results_dir, logs_dir = None, trace_rows = 50):
 
     if model.PF is not None and len(model.PF):
         PF, row["archive"] = finite(model.PF), len(finite(model.PF))
-        # obj_hist is every point the search looked at, which plot_front.py draws behind the front;
-        # the hypervolume reference comes from the front itself, as utils.find_nadir does
         np.savez_compressed(os.path.join(results_dir, stem(task) + ".npz"),
                             PF = PF, PS = model.PS, obj_hist = finite(model.obj_hist),
                             iter_hist = model.iter_hist, w_hist = model.w_hist,
                             scal_hist = np.asarray(model.scal_hist, dtype = float))
         if len(PF):
-            # this run alone, so it reads straight away; --aggregate adds the one that compares
+            # hv_own: the HV of the model alone, extracting from itself, no comparison with others
             row["hv_own"] = float(HV(ref_point = PF.max(0))(PF))
 
     if logs_dir is not None and len(model.scal_hist):
@@ -161,14 +159,15 @@ def run(task, conf, results_dir, logs_dir = None, trace_rows = 50):
 
 def aggregate(results_dir):
     """
-        Merge the per-task rows and add the hypervolume, which is defined for every task, the DTLZ
-        runs past 3 objectives included. Its reference point is the one utils.evaluate() uses - the
-        worst value per objective over the non-dominated points, find_nadir(use_all = False) -
-        pooled over the models of one (problem, n_dim, n_obj, seed).
+        A task is: ("problem", "n_dim", "n_obj", "seed") -> comparable among models
 
-        One seed is one experiment: its models share a reference point, and seed 1's hypervolume is
-        not on the scale of seed 2's. Compare models within a seed and aggregate across seeds by
-        rank, which is why hv_rank is here, rather than by averaging the raw numbers.
+        Merge the per-task rows and compute per-task hypervolume. The per-task HV is computed by:
+        using the nadir reference point as worst value per objective over the non-dominated points,
+        i.e. find_nadir(use_all = False), pooled over the models of one (problem, n_dim, n_obj, seed).
+
+        One seed is one experiment: its models share a reference point.
+        Compare models within a seed and aggregate across seeds by rank, i.e. hv_rank,
+        rather than by averaging across the seeds.
     """
     from pymoo.indicators.hv import HV
 
@@ -184,15 +183,16 @@ def aggregate(results_dir):
                 if os.path.exists(path)}
 
     table["hypervolume"] = np.nan
+    # group_key does not include the models
+    # group_key: ("problem", "n_dim", "n_obj", "seed")
     for group_key, group in table.groupby(["problem", "n_dim", "n_obj", "seed"]):
         keys = [k for k in archives if k[1:] == group_key]
         if not keys:
             continue
-        # one box for the seed's models - the worst point of the pool sits on it and scores nothing
         ref = np.vstack([archives[k] for k in keys]).max(0)
         hv = HV(ref_point = ref)
         table.loc[group.index, "hv_ref"] = " ".join(f"{v:.6g}" for v in ref)
-        table.loc[group.index, "hv_models"] = len(keys)     # 3 when the seed is complete
+        table.loc[group.index, "hv_models"] = len(keys)
         table.loc[group.index, "hypervolume"] = [
             float(hv(archives[k])) if k in archives else np.nan
             for k in ((m, *group_key) for m in group.model)]
@@ -248,8 +248,7 @@ def main():
         print(f"task {args.index}: {' '.join(str(part) for part in task)}", flush = True)
         row = run(task, conf, results_dir, logs_dir, args.trace_rows)
         pd.DataFrame([row]).to_csv(os.path.join(results_dir, stem(task) + ".csv"), index = False)
-        print({k: row[k] for k in ("status", "hv_own", "archive", "n_func_eval", "wallclock")},
-              flush = True)
+        print({k: row[k] for k in ("status", "hv_own", "archive", "n_func_eval", "wallclock")}, flush = True)
         if "trace" in row:
             print("trace written to", row["trace"], flush = True)
 
