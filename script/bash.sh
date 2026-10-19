@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=AS_sweep             # baseline / CAS / LAS adaptive scalarisation sweep
-#SBATCH --array=0-659                   # one task per line of `run_experiment.py --list` (see job.conf)
+#SBATCH --array=0-989                   # one task per line of `run_experiment.py --list` (see job.conf)
 #SBATCH --ntasks=1                      # We are planning to run one task
 #SBATCH --nodes=1                       # We request the use of 1 compute node for this task
 #SBATCH --cpus-per-task=1               # nothing here threads, and 1 core per task lets every
@@ -19,10 +19,8 @@
 # Set --array above to 0 .. (count - 1), where count comes from
 #   python run_experiment.py --conf job.conf --count
 
-set -eo pipefail        # not -u: ~/.bashrc often reads variables that are unset in a batch shell
+set -eo pipefail
 
-# under sbatch the script runs from a copy in the node's spool directory, so BASH_SOURCE points
-# there rather than at the repo; SLURM_SUBMIT_DIR is where sbatch was called from
 cd "${SLURM_SUBMIT_DIR:-$(dirname "${BASH_SOURCE[0]}")}"
 T1=$(date +%s)
 mkdir -p logs results
