@@ -33,7 +33,7 @@ models = [
     LinearModel(problem = ZDT2(n_dim = 20), max_iter = 50, random_state = 42),
     ChoquetModel(problem = ZDT2(n_dim = 20), max_iter = 50, random_state = 42, method = 2),
     LipschitzModel(problem = ZDT2(n_dim = 20), max_iter = 50, random_state = 42,
-                    type = "global_mon", num_k = 2, mon = [1, 1, 1])
+                    type = "global_mon", num_k = 2)      # mon defaults to one per objective
 ]
 
 # Run and get the result
