@@ -1,14 +1,12 @@
 """
-    Plot a task's result from its .npz with utils.visualise(), as the notebook does for a live model.
+    Plot a task's result from its .npz.
 
-        python plot_from_npz.py results/cas_ZDT2_d10_m2_s0.npz
-        python plot_from_npz.py results/las_DTLZ1_d10_m3_s0.npz --kind learning --level-sets
+        python plot_from_npz.py results/cas_ZDT1_d10_m2_s0.npz
+        python plot_from_npz.py results/las_ZDT1_d10_m3_s0.npz --kind learning --level-sets
         python plot_from_npz.py results/baseline_ZDT1_d10_m2_s0.npz --kind true_pf
-        python plot_from_npz.py results/cas_ZDT2_d10_m2_s0.npz --save front.png
+        python plot_from_npz.py results/cas_ZDT1_d10_m2_s0.npz --save front.png
 
-    The model is rebuilt from the file name and the conf, unsolved, and the saved arrays are put
-    back on it. The .npz holds no fitted state, so for "learning" each iteration's fit is replayed
-    from the saved evaluations and checked against the weights the run recorded.
+    The .npz does not contain models' states, hence refitting the models.
 """
 import argparse, os, re, sys
 
@@ -22,11 +20,6 @@ from utils import visualise
 
 
 def realign(model):
-    """
-        run_experiment saves obj_hist with its nan/inf rows dropped but iter_hist, w_hist and
-        scal_hist whole. A non-finite objective vector scalarises to a non-finite value, so
-        scal_hist marks the dropped rows. Returns False when the counts do not agree.
-    """
     if len(model.obj_hist) == len(model.iter_hist):
         return True
     keep = np.isfinite(model.scal_hist)
@@ -39,9 +32,7 @@ def realign(model):
 
 def replay_states(model):
     """
-        Refit the scalarising function of every iteration, as solve() did: learn_weight() at
-        iteration it is handed the archive of every evaluation up to iteration it - 1.
-        Returns the largest gap to the weights the run recorded, so a replay that drifted shows.
+        Refit the scalarising function of every iteration, as solve() did.
     """
     obj, steps, W, final = model.obj_hist, np.asarray(model.iter_hist), model.w_hist, model.PF
     model.state_hist = {0: model._state()}          # before any fit - the plain weighted sum
@@ -97,11 +88,10 @@ def main():
         model.iter_hist = np.zeros(len(model.obj_hist), int)   # the objective view never reads it
 
     if args.kind == "learning":
-        print(f"replaying {int(np.max(model.iter_hist))} fits - a large Choquet archive takes minutes", flush = True)
+        print(f"replaying {int(np.max(model.iter_hist))} fits - may take long", flush = True)
         gap = replay_states(model)
         if gap > 1e-6:
-            print(f"warning: the replayed weights differ from the recorded ones by up to {gap:.3g}"
-                  " - check --conf is the one the task ran with")
+            print(f"warning: the replayed weights differ from the recorded ones by up to {gap:.3g}")
 
     fig = visualise(model, args.kind, show = not args.save, plot_scalarisation = args.level_sets)
 
