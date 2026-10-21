@@ -1,8 +1,14 @@
 from typing import List, Tuple, Dict, Type, Any
+import sys
+from pathlib import Path
 import numpy as np
 import itertools, pandas as pd
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))        # models, tests and utils live one level up, in src/
+
 from models import LinearModel, ChoquetModel, LipschitzModel, BaseModel
-from tests import ZDT1, ZDT2, ZDT3, DTLZ1, DTLZ2
+from tests import ZDT1, ZDT2, ZDT3, DTLZ1, DTLZ2, Kursawe, Sch2, Fon
 from tests import Problem
 
 import matplotlib.pyplot as plt
@@ -11,13 +17,13 @@ from utils import evaluate, visualise_weights, live_trace
 
 
 
-def many_models(models: List[Type[BaseModel]]) -> List[BaseModel]:
+def many_models(models: List[Type[BaseModel]], folder: Path, solver: str) -> List[BaseModel]:
     result = []
     for model in models:
         print(f"Runnning {type(model).__name__}")
         # the trace is written while it runs: the parameters of each iteration, then the
         # evaluations it made and the value of the scalarising function there
-        trace = f"trace_{type(model).__name__}_{type(model.problem).__name__}.log"
+        trace = folder / f"{type(model).__name__}_{solver}.log"
         model.solve(live_trace(trace))
         print("trace written to", trace)
         result.append(model)
@@ -27,45 +33,89 @@ def many_models(models: List[Type[BaseModel]]) -> List[BaseModel]:
 
 # ====================================================== TESTING ======================================================
 
-# model instantiation
 """
-    If you want to test a single model -> put one single model
-
-    For multiple models -> add more to it
+    One cell is one (problem, solver) pair
 """
-models = [
-    LinearModel(problem = ZDT2(n_dim = 20), max_iter = 50, random_state = 42),
-    ChoquetModel(problem = ZDT2(n_dim = 20), max_iter = 50, random_state = 42, method = 2),
-    LipschitzModel(problem = ZDT2(n_dim = 20), max_iter = 50, random_state = 42,
-                    type = "global_mon", num_k = 2)      # mon defaults to one per objective
-]
+N_DIM, MAX_ITER, SEED, PLOTS = 5, 10, 42, True
 
-# Run and get the result
-m_res = many_models(models)
-print()
+problems = {
+    "ZDT1":     lambda: ZDT1(n_dim = N_DIM),
+    "ZDT2":     lambda: ZDT2(n_dim = N_DIM),
+    "DTLZ1_2d": lambda: DTLZ1(n_dim = N_DIM, n_obj = 2),
+    "DTLZ1_3d": lambda: DTLZ1(n_dim = N_DIM, n_obj = 3),
+    "DTLZ2_2d": lambda: DTLZ2(n_dim = N_DIM, n_obj = 2),
+    "DTLZ2_3d": lambda: DTLZ2(n_dim = N_DIM, n_obj = 3),
+    "Kursawe":  lambda: Kursawe(n_dim = N_DIM),
+    "Sch2":     lambda: Sch2(n_dim = N_DIM),
+    "Fon":      lambda: Fon(n_dim = N_DIM)
+}
+
+# all solvers here are constrained optimisation
+# exclude "trust-constr", it raises error for passing `eps` -> can test later
+solvers = ["L-BFGS-B", "Powell", "Nelder-Mead", "TNC", "COBYLA", "COBYQA", "SLSQP"]
 
 
-# Obtain the results - be careful with the Hypervolume
-# If the `models` you specified above include other test problems, the HV will be incomparable
-# Since the HV calculation extracts the PF found by all models to get the reference nadir point
-print(evaluate(m_res), end = "\n\n")
+def build(problem: Problem, solver: str) -> List[BaseModel]:
+    "the three models on one problem, all given the same solver"
+    return [
+        LinearModel(problem = problem, max_iter = MAX_ITER, random_state = SEED, solver = solver),
+        ChoquetModel(problem = problem, max_iter = MAX_ITER, random_state = SEED, solver = solver,
+                     method = 2),
+        LipschitzModel(problem = problem, max_iter = MAX_ITER, random_state = SEED, solver = solver,
+                       type = "global_mon", num_k = 2)
+    ]
+
+
+def plots(model: BaseModel, folder: Path, solver: str) -> None:
+    "the objective view of one run, saved rather than shown, next to its trace"
+    path = folder / f"{type(model).__name__}_{solver}.png"
+    try:
+        model.visualise("objective", show = False).savefig(path)
+    except Exception as exc:
+        print(f"  no plot: {type(exc).__name__}: {exc}")
+    plt.close("all")
+
+
+def in_box(model: BaseModel):
+    "did every evaluation stay inside the problem's own box? None when it declares none"
+    if model.problem.xl is None:
+        return None
+    return bool(np.all((model.dec_hist >= model.problem.xl) & (model.dec_hist <= model.problem.xu)))
 
 
 
-# Sanity check
-print("Decision space --- within [lb, ub]?")
-def check(m: BaseModel, lb: float, ub: float) -> bool:
-    return np.all((m.dec_hist >= lb) & (m.dec_hist <= ub))
 
-res = []
 
-for model in m_res:
-    # you can change the bound - assume box constraints
-    res.append({
-        "model": type(model).__name__,
-        "ok": check(model, 0, 1)
-    })
+rows, boxes = [], {}
+for (name, make), solver in itertools.product(problems.items(), solvers):
+    stem = f"{name}_{solver}"
+    print(f"===== {stem}")
+    folder = HERE / "problems" / name
+    folder.mkdir(parents = True, exist_ok = True)
+    try:
+        fitted = many_models(build(make(), solver), folder, solver)
+        table = evaluate(fitted)
+        boxes[stem] = table.attrs.pop("nadir")          # pd.concat() compares attrs, and
+                                                        # comparing two nadir arrays is ambiguous
+        table["in_box"] = [in_box(m) for m in fitted]   # evaluate() keeps the models in order
+        rows.append(table.assign(problem = name, solver = solver, status = "ok"))
+        if PLOTS:
+            for model in fitted:
+                plots(model, folder, solver)
+    except Exception as exc:
+        print(f"  failed: {type(exc).__name__}: {exc}")
+        rows.append(pd.DataFrame([dict(problem = name, solver = solver,
+                                       status = f"{type(exc).__name__}: {exc}"[:120])],
+                                 index = ["-"]))
+    print()
 
-print(
-    pd.DataFrame(res).set_index("model")
-)
+
+results = (pd.concat(rows).rename_axis("model").reset_index()
+             .set_index(["problem", "solver", "model"]).sort_index())
+print(results, end = "\n\n")
+results.to_csv(HERE / "results_by_solver.csv")
+print("written to", HERE / "results_by_solver.csv", end = "\n\n")
+
+print("reference point per cell")
+for stem, nadir in boxes.items():
+    print(f"  {stem:28s} {np.round(nadir, 4)}")
