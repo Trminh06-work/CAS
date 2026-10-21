@@ -73,11 +73,11 @@ class BaseModel(ABC):
             Everything scalarise() reads besides w. The model keeps only its latest fit, so without
             this a plot of iteration k would be drawn with the function learnt at the last one.
         """
-        return dict(worst = self._worst)
+        return dict(worst = self._worst, w = np.array(self.w, dtype = float))
 
 
     def _set_state(self, state):
-        self._worst = state["worst"]
+        self._worst, self.w = state["worst"], state["w"]
 
 
     @contextmanager
@@ -165,7 +165,7 @@ class BaseModel(ABC):
         self._worst = np.max(self.PF, axis = 0)
 
 
-    def solve(self):
+    def solve(self, callback = None):
         # keep the search inside the box the test problem is defined on
         bounds = list(zip(self.problem.xl, self.problem.xu)) if self.problem.xl is not None else None
 
@@ -178,6 +178,8 @@ class BaseModel(ABC):
         # Step 0: Initialisation
         self.iteration = 0
         self.state_hist[0] = self._state()      # before any fit - the plain weighted sum
+        if callback is not None:
+            callback(self, "learn")
         # Other NLP solvers
         # x0 = self.rng.random(self.PS_dim)
         # minimize(self.F, x0, args = (self.w,), method = self.solver, bounds = bounds, tol = self.tol)
@@ -194,6 +196,8 @@ class BaseModel(ABC):
 
         # Filter out the non-dominated points obtained -> current PF and PS approximation
         self.filter_PF_PS()
+        if callback is not None:
+            callback(self, "eval")
 
         # Adaptive Scalarisation
         for it in range(1, int(self.max_iter + 1)):
@@ -204,6 +208,8 @@ class BaseModel(ABC):
             # y is the vector of ones y = [1, 1, ..., 1] whose size is len(self.PF)
             self.y = np.ones(len(self.PF))
             self.w = self.learn_weight()
+            if callback is not None:
+                callback(self, "learn")
             self.state_hist[it] = self._state()
 
             # Step 2: Optimise subject to the learnt weight
@@ -221,6 +227,8 @@ class BaseModel(ABC):
 
             # Filter out the non-dominated points obtained -> current PF and PS approximation
             self.filter_PF_PS()
+            if callback is not None:
+                callback(self, "eval")
 
         self.wallclock_time = time.perf_counter() - start
 
