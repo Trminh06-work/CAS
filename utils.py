@@ -290,9 +290,9 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
             Q = np.atleast_2d(Q)
             return Q if len(Q) <= n else Q[np.linspace(0, len(Q) - 1, n).astype(int)]
 
-        sets = [] if only_true else [("non-dominated", sample(front), "crimson")]
+        sets = [] if only_true else [("non-dominated", sample(front), "royalblue")]
         if true is not None and (show_true or only_true):
-            sets.append(("true PF", sample(true), "0.6"))
+            sets.append(("true PF", sample(true), "crimson"))
         if not sets or not len(sets[0][1]):
             raise RuntimeError("Nothing to visualise yet - call solve() first")
 
@@ -493,7 +493,7 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
         if true is not None and show_true and dim <= 3:
             fig.add_trace((go.Scatter3d if dim == 3 else go.Scatter)(
                 **dict(zip("xyz", true.T)), mode = "markers", name = "true PF",
-                marker = dict(size = 3 if dim == 2 else 2, color = "red")))
+                marker = dict(size = 3 if dim == 2 else 2, color = "crimson")))
         base = len(fig.data)
         for trace in traces(iters[-1]):
             fig.add_trace(trace)
@@ -543,14 +543,14 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
     # if dim == 3:                      # f1 to the right, f2 to the left, both meeting at their max
     #     ax.view_init(elev = 22, azim = 45)
 
-    if true is not None and (show_true or only_true):
-        draw(true, lines = True, color = "0.6", s = 10 * mag, lw = 0.6, label = "true PF")
-        # draw(true, lines = True, color = "C0", s = 10 * mag, lw = 0.6, label = "true PF") # to plot the true PF
     if not only_true:
         off = 0 if zlo is None else int(np.sum(~np.all((hist >= zlo) & (hist <= zhi), 1)))
-        draw(hist, color = "C0", s = 5 * mag, alpha = 0.35, lw = 0.5,
+        draw(hist, color = "0.6", s = 5 * mag, alpha = 0.35, lw = 0.5,
              label = f"evaluated ({len(hist)}" + (f", {off} off-frame)" if off else ")"))
-        draw(front, color = "crimson", s = 3 * mag, lw = 1.2, label = f"non-dominated ({len(front)})")
+    if true is not None and (show_true or only_true):
+        draw(true, lines = True, color = "crimson", s = 10 * mag, lw = 0.6, label = "true PF")
+    if not only_true:
+        draw(front, color = "royalblue", s = 3 * mag, lw = 1.2, label = f"non-dominated ({len(front)})")
 
     if dim <= 3:
         ax.set(xlabel = names[0], ylabel = names[1])
