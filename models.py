@@ -185,7 +185,7 @@ class BaseModel(ABC):
         # DIRECT solver
         # Use the given weight vector first
         direct(self.F, args = (self.w,),  # solve using scalarised F
-                bounds = bounds, maxiter = self.max_iter * 10)
+                bounds = bounds, maxiter = self.PS_dim * 20)
         # Then apply multi-start weight vectors
         # for _ in range(self.max_iter * 100):
         #     w = self.rng.dirichlet(np.ones(self.PF_dim))     # no repeated vector, \sum_{w_i} = 1 and w_i > 0
@@ -211,13 +211,13 @@ class BaseModel(ABC):
                 # DIRECT solver
                 # -> no need multi-start
                 direct(self.F, args = (self.w,),  # solve using scalarised F
-                        bounds = bounds, maxiter = self.max_iter * 10)
+                        bounds = bounds, maxiter = self.PS_dim * 20)
             else:
                 # Other NLP solvers
                 for _ in range(5 * self.PS_dim):
                     x = lo + (hi - lo) * self.rng.random(self.PS_dim)            # random intial point for solver
                     minimize(self.F, x, args = (self.w,), method = self.solver,  # solve using scalarised F
-                            bounds = bounds, tol = self.tol, options={'maxiter': 50})
+                            bounds = bounds, tol = self.tol, options={'eps':0.001,'maxiter': 50})
 
             # Filter out the non-dominated points obtained -> current PF and PS approximation
             self.filter_PF_PS()
