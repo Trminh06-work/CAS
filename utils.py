@@ -81,52 +81,70 @@ def evaluate(models_arr: List[BaseModel]):
 
 
 
-def trace_log(model: BaseModel, max_rows: int = None, path: str = None) -> str:
+def trace_learn(model: BaseModel, it: int, max_rows: int = None) -> str:
     """
-        Write a readable trace of one solved model: for each outer iteration, the non-dominated
-        points learn_weight() was given, what it learnt from them, and the evaluations the solver
-        then made with the value of the scalarising function there.
-
-        The scalarised values are the ones recorded as the solver saw them (model.scal_hist) and
-        each iteration's archive is the mask filter_PF_PS() kept (model.pf_hist).
-        max_rows caps the points listed per iteration; None writes all of them.
+        The head of one iteration's block: the non-dominated points learn_weight() was handed and
+        what it learnt from them.
     """
-    path = path or f"trace_{type(model).__name__}_{type(model.problem).__name__}.log"
-    obj, dec = np.atleast_2d(model.obj_hist), np.atleast_2d(model.dec_hist)
-    W = np.atleast_2d(model.w_hist)
-    iters, scal = np.asarray(model.iter_hist), np.asarray(model.scal_hist, dtype = float)
     names = [f"f{i + 1}" for i in range(model.PF_dim)]
+    # live, solve() may not have snapshotted this iteration yet - the model itself is that state
+    state = model.state_hist.get(int(it)) or model._state()
+    out = [f"\n=== iteration {int(it)}"]
 
-    with open(path, "w") as fh:
-        fh.write(f"{type(model).__name__} on {type(model.problem).__name__} - "
-                 f"seed {model.random_state}, {model.num_func_eval} evaluations\n")
+    keep = model.pf_hist.get(int(it) - 1)       # the archive learn_weight() was handed here
+    if keep is not None:
+        obj = np.atleast_2d(model.obj_hist)
+        scal, iters = np.asarray(model.scal_hist, dtype = float), np.asarray(model.iter_hist)
+        pf_it, rows = obj[:len(keep)][keep], slice(None, max_rows)
+        u = state["worst"] - pf_it[rows]
+        fit = pd.DataFrame(np.hstack([pf_it[rows], u]),
+                           columns = names + [f"u{i + 1}" for i in range(model.PF_dim)])
+        fit.insert(0, "it", iters[:len(keep)][keep][rows])      # the block this row is repeated from
+        fit["scalarised"] = scal[:len(keep)][keep][rows]        # exactly as that block printed it
+        out += [f"  learn_weight input: {len(pf_it)} non-dominated points",
+                fit.to_string(index = False)]
 
-        for it in np.unique(iters):
-            rows = (iters == it)
-            table = pd.DataFrame(obj[rows], columns = names)
-            table["scalarised"] = scal[rows]
-            table.insert(0, "x", [np.array2string(x, precision = 4, separator = ",",
-                                                  max_line_width = np.inf) for x in dec[rows]])
+    for key, value in state.items():
+        if key == "slip" and value is not None:         # the object is not readable on its own
+            value = f"{value.type}, {value.npts} points, LC = {value.LipsConst:.6g}"
+        out.append(f"  {key:10s}: {value}")
+    return "\n".join(out) + "\n"
 
-            fh.write(f"\n=== iteration {int(it)}: {int(rows.sum())} evaluations, w = {W[rows][0]}\n")
 
-            keep = model.pf_hist.get(int(it) - 1)   # the archive learn_weight() was handed here
-            if keep is not None:
-                pf_it, scal_it = obj[:len(keep)][keep], scal[:len(keep)][keep]
-                u = model.state_hist[int(it)]["worst"] - pf_it
-                fit = pd.DataFrame(np.hstack([pf_it, u]),
-                                   columns = names + [f"u{i + 1}" for i in range(model.PF_dim)])
-                fit["scalarised"] = scal_it         # the value each one had when it was found
-                fh.write(f"  learn_weight input: {len(pf_it)} non-dominated points\n")
-                fh.write(fit.head(max_rows).to_string(index = False) + "\n")
+def trace_evals(model: BaseModel, it: int, max_rows: int = None) -> str:
+    """
+        The tail of one iteration's block: the evaluations the solver made under that fit, with
+        the value it scored them - recorded in F() at the time, so already that iteration's own.
+    """
+    obj, dec = np.atleast_2d(model.obj_hist), np.atleast_2d(model.dec_hist)
+    iters, scal = np.asarray(model.iter_hist), np.asarray(model.scal_hist, dtype = float)
+    rows = (iters == it)
 
-            for key, value in model.state_hist.get(int(it), {}).items():
-                if key == "slip" and value is not None:     # the object is not readable on its own
-                    value = f"{value.type}, {value.npts} points, LC = {value.LipsConst:.6g}"
-                fh.write(f"  {key:10s}: {value}\n")
-            fh.write(table.head(max_rows).to_string(index = False) + "\n")
-    return path
+    table = pd.DataFrame(obj[rows][:max_rows], columns = [f"f{i + 1}" for i in range(model.PF_dim)])
+    table["scalarised"] = scal[rows][:max_rows]
+    table.insert(0, "x", [np.array2string(x, precision = 4, separator = ",",
+                                          max_line_width = np.inf) for x in dec[rows][:max_rows]])
+    return f"  {int(rows.sum())} evaluations\n" + table.to_string(index = False) + "\n"
 
+
+def trace_header(model: BaseModel) -> str:
+    # no evaluation count: each block carries its own, and a live header is written before the end
+    return f"{type(model).__name__} on {type(model.problem).__name__} - seed {model.random_state}\n"
+
+
+def live_trace(path: str, max_rows: int = None):
+    first = True
+
+    def write(model, phase):
+        nonlocal first
+        with open(path, "w" if first else "a") as fh:
+            if first:
+                fh.write(trace_header(model))
+            fh.write((trace_learn if phase == "learn" else trace_evals)(
+                model, model.iteration, max_rows))
+        first = False
+
+    return write
 
 
 def visualise_weights(model: BaseModel, kind = "symmetric", show = True):

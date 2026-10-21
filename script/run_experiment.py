@@ -4,10 +4,11 @@
         python run_experiment.py --conf job.conf --count       how many tasks the grid expands to
         python run_experiment.py --conf job.conf --list        the task list, each line led by its index
         python run_experiment.py --conf job.conf --index 7     run task 7 and write its result
+        python run_experiment.py --conf job.conf --index 7 --live   ... and trace it as it goes
         python run_experiment.py --conf job.conf --aggregate   merge the rows -> results/summary.csv
 
-    A task writes results/<model>_<problem>_d<n_dim>_m<n_obj>_s<seed>.{csv,npz} and the matching
-    logs/trace_<...>.log - what each iteration learnt and the evaluations it made.
+    A task writes results/<model>_<problem>_d<n_dim>_m<n_obj>_s<seed>.{csv,npz}, and under --live
+    the matching logs/trace_<...>.log - what each iteration learnt and the evaluations it made.
 
     5 pieces of information about Hypervolume:
         hv_own      : the hypervolume on that run's own front       (after running a task, i.e. --index #)
@@ -117,7 +118,7 @@ def finite(A):
     return A[np.all(np.isfinite(A), 1)]
 
 
-def run(task, conf, results_dir, logs_dir = None, trace_rows = 50):
+def run(task, conf, results_dir, logs_dir = None, trace_rows = 50, live = False):
     from pymoo.indicators.hv import HV
 
     model_key, problem_name, n_dim, n_obj, seed = task
@@ -134,14 +135,24 @@ def run(task, conf, results_dir, logs_dir = None, trace_rows = 50):
     if problem.n_obj != n_obj:
         row["status"] = f"n_obj mismatch: grid says {n_obj}, {problem_name} builds {problem.n_obj}"
 
+    # logs/trace_<model>_<problem>_d<n_dim>_m<n_obj>_s<seed>.log
+    trace_path = None if logs_dir is None or not live else os.path.join(
+        logs_dir, "trace_" + stem(task) + ".log")
+    callback = None
+    if trace_path is not None:
+        from utils import live_trace
+        callback = live_trace(trace_path, trace_rows or None)
+
     try:
         with contextlib.redirect_stdout(io.StringIO()):      # the solvers print; keep the log clean
-            model.solve()
+            model.solve(callback)
     except Exception as exc:
         row["status"] = f"{type(exc).__name__}: {exc}"[:200]
         traceback.print_exc()
 
     row["wallclock"] = round(model.wallclock_time, 4)        # solve() times itself, failures too
+    if trace_path is not None and os.path.exists(trace_path):
+        row["trace"] = trace_path
     row["n_func_eval"], row["n_iter"] = int(model.num_func_eval), int(model.iteration)
     row["archive"], row["hv_own"] = 0, np.nan
 
@@ -155,12 +166,6 @@ def run(task, conf, results_dir, logs_dir = None, trace_rows = 50):
             # hv_own: the HV of the model alone, extracting from itself, no comparison with others
             row["hv_own"] = float(HV(ref_point = PF.max(0))(PF))
 
-    if logs_dir is not None and len(model.scal_hist):
-        # per iteration: the non-dominated points learn_weight() was given, what it learnt from
-        # them (w_vec, v, b_int, the Lipschitz constant) and the evaluations that followed
-        from utils import trace_log
-        row["trace"] = trace_log(model, max_rows = trace_rows or None,
-                                 path = os.path.join(logs_dir, "trace_" + stem(task) + ".log"))
     return row
 
 
@@ -220,7 +225,9 @@ def main():
     parser.add_argument("--count", action = "store_true", help = "print how many tasks there are")
     parser.add_argument("--list", action = "store_true",
                         help = "print every task, one per line, led by its 0 based index")
-    parser.add_argument("--trace-rows", type = int, default = 50,
+    parser.add_argument("--live", action = "store_true",
+                        help = "trace the run into logs/trace_<task>.log while it goes")
+    parser.add_argument("--trace-rows", type = int, default = 0,
                         help = "points listed per iteration in the trace log; 0 writes all of them")
     parser.add_argument("--aggregate", action = "store_true",
                         help = "after the sweep: merge the rows and add the per-seed hypervolume")
@@ -247,13 +254,13 @@ def main():
     elif not 0 <= args.index < len(grid):
         parser.error(f"index {args.index} is outside 0..{len(grid) - 1}")
     else:
-        logs_dir = os.path.join(HERE, "logs")       # SLURM needs it too, for its own -o file
+        logs_dir = os.path.join(HERE, "logs")
         for directory in (results_dir, logs_dir):
             os.makedirs(directory, exist_ok = True)
 
         task = grid[args.index]
         print(f"task {args.index}: {' '.join(str(part) for part in task)}", flush = True)
-        row = run(task, conf, results_dir, logs_dir, args.trace_rows)
+        row = run(task, conf, results_dir, logs_dir, args.trace_rows, args.live)
         pd.DataFrame([row]).to_csv(os.path.join(results_dir, stem(task) + ".csv"), index = False)
         print({k: row[k] for k in ("status", "hv_own", "archive", "n_func_eval", "wallclock")}, flush = True)
         if "trace" in row:

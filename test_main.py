@@ -6,7 +6,7 @@ from tests import ZDT1, ZDT2, ZDT3, DTLZ1, DTLZ2
 from tests import Problem
 
 import matplotlib.pyplot as plt
-from utils import evaluate, visualise_weights, trace_log
+from utils import evaluate, visualise_weights, live_trace
 
 
 
@@ -15,7 +15,11 @@ def many_models(models: List[Type[BaseModel]]) -> List[BaseModel]:
     result = []
     for model in models:
         print(f"Runnning {type(model).__name__}")
-        model.solve()
+        # the trace is written while it runs: the parameters of each iteration, then the
+        # evaluations it made and the value of the scalarising function there
+        trace = f"trace_{type(model).__name__}_{type(model.problem).__name__}.log"
+        model.solve(live_trace(trace))
+        print("trace written to", trace)
         result.append(model)
     return result
 
@@ -46,13 +50,6 @@ print()
 # Since the HV calculation extracts the PF found by all models to get the reference nadir point
 print(evaluate(m_res), end = "\n\n")
 
-
-
-# Trace file per model: the parameters of each iteration, then the evaluations it made and the
-# value of the scalarising function there. max_rows keeps it readable - drop it for the full history
-for model in m_res:
-    print("trace written to", trace_log(model), end = "\n")
-print()
 
 
 # Sanity check
