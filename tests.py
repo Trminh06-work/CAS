@@ -2,6 +2,7 @@ from typing import List
 import numpy as np
 from pymoo.problems import get_problem
 from pymoo.core.problem import ElementwiseProblem
+from agg import AggFunc
 
 
 
@@ -65,13 +66,15 @@ class ExtendedProblem(ElementwiseProblem):
         the minimum of the test problems in the given list
 
         Parameters:
-            problems (list[ElementwiseProblem]): Optimization problems used to construct
-                the decision space. Every one of them is searched on the unit box.
+            problems (list[ElementwiseProblem | AggFunc]): Optimization problems used to construct
+                the decision space. Every one of them is searched on the unit box. An aggregation
+                function from agg.py, e.g. QAM([...], gen, inv_gen), stands for the one objective it
+                makes of its own problems - see Aggregated.
 
             order (list, optional): which objectives of the combined vector to keep, and in which
                 order. Defaults to all of objectives in the given problems.
     """
-    def __init__(self, problems: List[ElementwiseProblem] | None = None, order: List | None = None, **kwargs):
+    def __init__(self, problems: List[ElementwiseProblem | AggFunc] | None = None, order: List | None = None, **kwargs):
         if problems is None:
             raise ValueError("No problems are given")
 
@@ -99,11 +102,13 @@ class ExtendedProblem(ElementwiseProblem):
         """
             Turn the list into instances. A class stands for an instance of itself only when its
             own definition fixes its size; anything else has to be constructed, so that a decision
-            space is never set by default.
+            space is never set by default. An aggregation function becomes the problem it defines.
         """
         out = []
         for p in problems:
-            if not isinstance(p, type):             # already an instance, left alone
+            if isinstance(p, AggFunc):              # one objective, aggregated from its own problems
+                out.append(Aggregated(p))
+            elif not isinstance(p, type):           # already an instance, left alone
                 out.append(p)
             elif getattr(p, "N_VAR", None):         # its own definition fixes the size
                 out.append(p())
@@ -130,6 +135,83 @@ class ExtendedProblem(ElementwiseProblem):
 
     def pareto_front(self, n_points = 300):
         raise NotImplementedError("Extended problem - no analytical PF")
+
+
+
+class Aggregated(ElementwiseProblem):
+    """
+        One objective, made by an aggregation function (agg.py) from the objectives of its problems, which share
+        one decision vector as in ExtendedProblem. An aggregation function acts on [0, 1]^n and is non-decreasing,
+        whereas the objectives are minimised, each on its own scale. So every objective is
+            1. normalised to [0, 1], with bounds fixed here, once, and clipped
+            2. turned into a satisfaction degree, s = 1 - normalised (1 = best)
+        and the aggregate is returned as 1 - A(s), to be minimised. Aggregating the normalised objectives as they are
+        would make a conjunctive A read "one objective at its best is enough": T_P would be 0 wherever ZDT2's f1 is.
+
+        ExtendedProblem wraps an aggregation function in this by itself; construct one directly to give own bounds.
+
+        Parameters:
+            func (AggFunc): the aggregation function, which holds the problems it aggregates
+
+            bounds (list of (lo, hi), optional): one pair per aggregated objective. Defaults to lo, the problem's
+                ideal point where its front is known, else the least sampled value, and hi, the largest.
+
+            n_samples (int): random points of the unit box the default bounds are taken from
+
+            seed (int): seed of those points
+    """
+    def __init__(self, func: AggFunc, bounds = None, n_samples: int = 10_000, seed: int = 0):
+        problems = ExtendedProblem._build(func.problems)
+        n_args = sum(p.n_obj for p in problems)
+        if n_args < 2:
+            raise ValueError(f"{type(func).__name__} needs at least 2 objectives to aggregate, got {n_args}")
+
+        self.func = func
+        self.inner = ExtendedProblem(problems = problems)      # every objective of every problem, in order
+        func.set_arity(n_args)
+
+        super().__init__(n_var = self.inner.n_var, n_obj = 1, xl = 0.0, xu = 1.0)
+        self.n_dim = self.n_var
+
+        if bounds is None:
+            self.lo, self.hi = self._bounds(n_samples, seed)
+        else:
+            bounds = np.asarray(bounds, dtype = float)
+            if bounds.shape != (n_args, 2) or np.any(bounds[:, 1] <= bounds[:, 0]):
+                raise ValueError(f"bounds needs one (lo, hi) pair, lo < hi, for each of the {n_args} objectives")
+            self.lo, self.hi = bounds[:, 0], bounds[:, 1]
+
+
+    def _bounds(self, n_samples, seed):
+        "lo: each problem's ideal point where its front is known, else the least sample; hi: the largest sample"
+        F = self.inner.evaluate(np.random.default_rng(seed).random((n_samples, self.n_var)))
+        lo, hi = F.min(axis = 0), F.max(axis = 0)
+
+        j = 0
+        for p in self.inner.problems:
+            try:
+                front = p.pareto_front()
+                if front is not None:
+                    lo[j:j + p.n_obj] = np.min(np.atleast_2d(front), axis = 0)
+            except NotImplementedError:
+                pass
+            j += p.n_obj
+
+        hi = np.where(hi > lo, hi, lo + 1.0)        # a flat objective would normalise to 0/0
+        return lo, hi
+
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        F = self.inner._objectives(x)
+        s = 1 - np.clip((F - self.lo) / (self.hi - self.lo), 0, 1)
+
+        # log(0), 1 / 0, ... of the generators are expected at the bounds, s_i = 0 or 1
+        with np.errstate(divide = "ignore", over = "ignore"):
+            out["F"] = np.array([1 - self.func.fun(s)], dtype = float)
+
+
+    def pareto_front(self, n_points = 300):
+        raise NotImplementedError("Aggregated problem - no analytical PF")
 
 
 

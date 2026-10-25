@@ -10,7 +10,6 @@
 from abc import ABC, abstractmethod
 from typing import Callable, List
 import numpy as np
-from utils import visualise
 from pymoo.core.problem import ElementwiseProblem
 
 
@@ -40,7 +39,14 @@ class AggFunc(ABC):
         self.problems = problems
         self.neutral = None     # short as, e
         self.absorb = None      # short as, a
-        self.n_dim = len(problems)
+        self.n_args = len(problems)     # arity; set_arity() replaces it once the problems' objectives are counted
+
+
+    def set_arity(self, n_args: int):
+        """
+            The number of values aggregated: every objective of every problem
+        """
+        self.n_args = n_args
 
 
     @abstractmethod
@@ -120,8 +126,8 @@ class TNorm(ConjunctiveFunc):
 
             Note: Additive generators are used, owing to numerical stability, instead of multiplicative generators
         """
-        if (len(x)) != self.n_dim:
-            raise ValueError(f"The shape of x ({len(x)}) does not match with predefined dimensions ({self.n_dim})")
+        if (len(x)) != self.n_args:
+            raise ValueError(f"The shape of x ({len(x)}) does not match with predefined dimensions ({self.n_args})")
         if self.is_archimedean:
             s = 0.0
             for i in range(len(x)):
@@ -157,9 +163,14 @@ class TConorm(DisjunctiveFunc):
         self.N = N if N is not None else (lambda t: 1 - t)
 
 
+    def set_arity(self, n_args: int):
+        super().set_arity(n_args)
+        self.t_norm.set_arity(n_args)       # evaluated through its t-norm
+
+
     def fun(self, x: np.ndarray):
-        if (len(x)) != self.n_dim:
-            raise ValueError(f"The shape of x ({len(x)}) does not match with predefined dimensions ({self.n_dim})")
+        if (len(x)) != self.n_args:
+            raise ValueError(f"The shape of x ({len(x)}) does not match with predefined dimensions ({self.n_args})")
         return self.N(self.t_norm.fun(self.N(x)))
 
 
@@ -304,7 +315,8 @@ class QAM(AveragingFunc):
     """
     def __init__(self, problems, gen: Callable | None = None, inv_gen: Callable | None = None, w_vec: np.ndarray | None = None):
         super().__init__(problems)
-        self.w_vec = np.ones(self.n_dim) / self.n_dim if w_vec is None else w_vec
+        self.w_given = w_vec is not None
+        self.w_vec = np.ones(self.n_args) / self.n_args if w_vec is None else np.asarray(w_vec, dtype = float)
         if gen is None or inv_gen is None:
             raise ValueError("A generating function and its inverse are not specified")
         self.gen = gen
@@ -318,9 +330,17 @@ class QAM(AveragingFunc):
             self.absorb = 0 if g0 else 1
 
 
+    def set_arity(self, n_args: int):
+        super().set_arity(n_args)
+        if not self.w_given:
+            self.w_vec = np.ones(n_args) / n_args       # equal weights, over every objective aggregated
+        elif len(self.w_vec) != n_args:
+            raise ValueError(f"w_vec has {len(self.w_vec)} weights, but {n_args} objectives are aggregated")
+
+
     def fun(self, x: np.ndarray):
-        if (len(x)) != self.n_dim:
-            raise ValueError(f"The shape of x ({len(x)}) does not match with predefined dimensions ({self.n_dim})")
+        if (len(x)) != self.n_args:
+            raise ValueError(f"The shape of x ({len(x)}) does not match with predefined dimensions ({self.n_args})")
         s = 0.0
         for i in range(len(x)):
             s += self.w_vec[i] * self.gen(x[i])
@@ -359,8 +379,8 @@ class Uninorm(MixedFunc):
                 1. Directly via _func(x), if the function admits
                 2. Utilisation of univariate, if representable
         """
-        if (len(x)) != self.n_dim:
-            raise ValueError(f"The shape of x ({len(x)}) does not match with predefined dimensions ({self.n_dim})")
+        if (len(x)) != self.n_args:
+            raise ValueError(f"The shape of x ({len(x)}) does not match with predefined dimensions ({self.n_args})")
         if self.absorb is not None and np.any(x == self.absorb):
             return self.absorb      # absorbing element, resolves -inf + inf of representable uninorms
         if self.is_representable:
@@ -406,40 +426,8 @@ class ThreePi(Uninorm):
 # ====================================================== TESTING ======================================================
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
-    from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
-
-    def wireframe(ax, f, X, Y, Z, stride = 3, eps = 1e-9):
-        """
-            ax.plot_wireframe without the segments drawn across discontinuities, e.g. T_D on the edges x_i = 1, which
-            would otherwise appear as lines on non-existing faces. The segment [p, q] is split if most of its change
-            happens within eps of one end, i.e. the one-sided limit there differs from the value at that grid point
-        """
-        def jump(a, b):
-            (p, zp), (q, zq) = (a[:2], a[2]), (b[:2], b[2])
-            if abs(zq - zp) < 1e-9:
-                return False
-            with np.errstate(divide = "ignore", invalid = "ignore", over = "ignore"):
-                zp_lim, zq_lim = f.fun(p + eps * (q - p)), f.fun(q + eps * (p - q))
-            return abs(zp - zp_lim) > 0.5 * abs(zq - zp) or abs(zq - zq_lim) > 0.5 * abs(zq - zp)
-
-        # rows and columns as plot_wireframe draws them: every stride-th, plus the last
-        idx = list(range(0, len(X), stride))
-        if idx[-1] != len(X) - 1:
-            idx.append(len(X) - 1)
-        lines = []
-        for line in [np.stack([X[i], Y[i], Z[i]], 1) for i in idx] + [np.stack([X[:, j], Y[:, j], Z[:, j]], 1) for j in idx]:
-            start = 0
-            for s in range(len(line) - 1):
-                if jump(line[s], line[s + 1]):
-                    lines.append(line[start:s + 1])
-                    start = s + 1
-            lines.append(line[start:])
-        ax.add_collection3d(Line3DCollection(lines, colors = "grey", linewidths = 0.6), autolim = False)
-        ax.set(xlim = (0, 1), ylim = (0, 1), zlim = (0, 1))
-
-
-    problems = [None, None]     # only len(problems) is used: n = 2, so that f: [0, 1]^2 -> [0, 1] can be drawn
+    problems = [None, None]
     groups = {
         "Basic t-norms": {
             r"$T_{min}$": SchweizerSklar(problems, -np.inf),        # limiting case, lambda = -inf
@@ -479,7 +467,7 @@ if __name__ == "__main__":
             # surface, viewed from the (0, 0) corner
             ax = fig.add_subplot(2, len(funcs), k + 1, projection = "3d")
             ax.grid(False)
-            wireframe(ax, f, X, Y, Z)
+            ax.plot_wireframe(X, Y, Z, color = "grey", linewidth = 0.6)
             ax.set(title = f"{name}\ne = {f.neutral}, a = {f.absorb}", xlabel = "$x_1$", ylabel = "$x_2$", zlim = (0, 1))
             ax.view_init(elev = 25, azim = -135)
 
@@ -487,8 +475,6 @@ if __name__ == "__main__":
             ax = fig.add_subplot(2, len(funcs), len(funcs) + k + 1)
             cs = ax.contour(X, Y, Z, levels = levels, colors = "grey", linewidths = 0.6)
 
-            # labels where each level set crosses the diagonal, f(t, t) = c (monotone in t), rather than matplotlib's
-            # choice, which crowds them against the edges; a level is left unlabelled if a neighbour crosses within 0.045
             d = np.interp(levels, np.diag(Z), t)
             gap = np.minimum(np.diff(d)[:-1], np.diff(d)[1:])       # to the closer neighbour, for levels 0.1, ..., 0.9
             ax.clabel(cs, fontsize = 7, manual = [(p, p) for p in d[1:-1][gap >= 0.045]])
