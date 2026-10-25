@@ -55,6 +55,7 @@ class ConjunctiveFunc(AggFunc):
     """
     def __init__(self, problems):
         super().__init__(problems)
+        self.absorb = 0         # any conjunctive function, Example 1.31, (p. 13)
 
 
 
@@ -65,6 +66,7 @@ class DisjunctiveFunc(AggFunc):
     """
     def __init__(self, problems):
         super().__init__(problems)
+        self.absorb = 1         # any disjunctive function, Example 1.31, (p. 13)
 
 
 
@@ -308,6 +310,13 @@ class QAM(AveragingFunc):
         self.gen = gen
         self.inv_gen = inv_gen
 
+        # no neutral element; absorbing element a = 0 (resp. a = 1) only if all w_i > 0 and g(0) = +-inf (resp. g(1) = +-inf), (p. 49)
+        # if both are infinite, a depends on the convention for -inf + inf (Note 2.19), hence left unset
+        with np.errstate(divide = "ignore"):
+            g0, g1 = np.isinf(gen(np.float64(0))), np.isinf(gen(np.float64(1)))
+        if np.all(self.w_vec > 0) and g0 != g1:
+            self.absorb = 0 if g0 else 1
+
 
     def fun(self, x: np.ndarray):
         if (len(x)) != self.n_dim:
@@ -371,8 +380,8 @@ class ThreePi(Uninorm):
     """
     def __init__(self, problems):
         super().__init__(problems, is_representable=True)
-        self.neutral = 0.5
-        self.absorb = 0         # convention 0/0 = 0, i.e. conjunctive
+        self.neutral = 0.5      # Example 1.81, (p. 28)
+        self.absorb = 0         # convention 0/0 = 0, i.e. conjunctive uninorm, (pp. 201, 209)
 
 
     def _func(self, x: np.ndarray):
@@ -421,7 +430,7 @@ if __name__ == "__main__":
             "quadratic": QAM(problems, gen = lambda t: t ** 2, inv_gen = np.sqrt),
         },
         "Uninorms": {
-            r"3-$\Pi$, e = 0.5": ThreePi(problems),
+            r"3-$\Pi$": ThreePi(problems),
         },
     }
 
@@ -437,14 +446,14 @@ if __name__ == "__main__":
 
             # surface, viewed from the (0, 0) corner
             ax = fig.add_subplot(2, len(funcs), k + 1, projection = "3d")
-            ax.plot_surface(X, Y, Z, cmap = "viridis", vmin = 0, vmax = 1, linewidth = 0)
-            ax.set(title = name, xlabel = "$x_1$", ylabel = "$x_2$", zlim = (0, 1))
+            ax.plot_surface(X, Y, Z, color = "grey")
+            ax.set(title = f"{name}\ne = {f.neutral}, a = {f.absorb}", xlabel = "$x_1$", ylabel = "$x_2$", zlim = (0, 1))
             ax.view_init(elev = 25, azim = -135)
 
             # level sets, f(x) = 0, 0.1, ..., 1
             ax = fig.add_subplot(2, len(funcs), len(funcs) + k + 1)
-            ax.contourf(X, Y, Z, levels = levels, cmap = "viridis")
-            ax.contour(X, Y, Z, levels = levels, colors = "k", linewidths = 0.4)
+            cs = ax.contour(X, Y, Z, levels = levels, colors = "grey", linewidths = 0.6)
+            ax.clabel(cs, fontsize = 7)
             ax.set(xlabel = "$x_1$", ylabel = "$x_2$", aspect = "equal")
         fig.suptitle(group)
         fig.tight_layout()
