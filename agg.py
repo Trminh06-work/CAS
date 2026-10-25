@@ -19,6 +19,7 @@ from pymoo.core.problem import ElementwiseProblem
 # ====================================== Base Class ======================================
 # ========================================================================================
 class Aggregator:
+    @staticmethod
     def _compatible_check(x: np.ndarray):
         pass
 
@@ -31,7 +32,7 @@ class Aggregator:
 class AggFunc(ABC):
     """
         Aggregation functions require the following axioms:
-            1. Monotonicity (non-decreasing) : x, y in [0, 1]^n : x < y => f(x) < f(y) - element-wise comparision
+            1. Monotonicity (non-decreasing) : x, y in [0, 1]^n : x <= y => f(x) <= f(y) - element-wise comparision
             2. Preservation of bounds        : f(0, ..., 0) = 0 and f(1, ..., 1) = 1
                                                   n-times              n-times
     """
@@ -211,7 +212,7 @@ class SchweizerSklar(TNorm):
     """
     def __init__(self, problems, lambda_param: float):
         super().__init__(problems)
-        self.is_archimedean = True
+        self.is_archimedean = np.isfinite(lambda_param)     # min and T_D (limiting cases)
         self.lambda_param = lambda_param
 
 
@@ -219,9 +220,9 @@ class SchweizerSklar(TNorm):
         if self.lambda_param == -np.inf:
             return min(x, y)
         elif self.lambda_param == 0:
-            return Product()._func(x, y)
+            return Product(self.problems)._func(x, y)
         elif self.lambda_param == np.inf:
-            return Drastic()._func(x, y)
+            return Drastic(self.problems)._func(x, y)
         else:
             x = x ** self.lambda_param
             y = y ** self.lambda_param
@@ -239,7 +240,8 @@ class SchweizerSklar(TNorm):
         if self.lambda_param == 0:
             return np.exp(-t)
         else:
-            return (1 - self.lambda_param * t) ** (1 / self.lambda_param)
+            # pseudo-inverse, g^(-1)(min(t, g(0))), as g(0) = 1 / lambda for lambda > 0
+            return max(1 - self.lambda_param * t, 0) ** (1 / self.lambda_param)
 
 
 
@@ -249,7 +251,7 @@ class Frank(TNorm):
     """
     def __init__(self, problems, lambda_param: float):
         super().__init__(problems)
-        self.is_archimedean = True
+        self.is_archimedean = (lambda_param != 0)     # min (limiting case)
         self.lambda_param = lambda_param
 
 
@@ -257,9 +259,9 @@ class Frank(TNorm):
         if self.lambda_param == 0:
             return min(x, y)
         elif self.lambda_param == 1:
-            return Product()._func(x, y)
+            return Product(self.problems)._func(x, y)
         elif self.lambda_param == np.inf:
-            return Lukasiewicz()._func(x, y)
+            return Lukasiewicz(self.problems)._func(x, y)
         else:
             x = self.lambda_param ** x - 1
             y = self.lambda_param ** y - 1
@@ -273,8 +275,9 @@ class Frank(TNorm):
         elif self.lambda_param == np.inf:
             return 1 - t
         else:
-            a = np.log(self.lambda_param - 1)
-            b = np.log(self.lambda_param ** t - 1)
+            # log of the (positive) ratio, split as |.| since both terms are negative for lambda < 1
+            a = np.log(abs(self.lambda_param - 1))
+            b = np.log(abs(self.lambda_param ** t - 1))
             return a - b
 
 
@@ -282,7 +285,8 @@ class Frank(TNorm):
         if self.lambda_param == 1:
             return np.exp(-t)
         elif self.lambda_param == np.inf:
-            return 1 - t
+            # pseudo-inverse, g^(-1)(min(t, g(0)))
+            return 1 - min(t, 1)
         else:
             # log_l ( [l - 1] / e^t + 1 ) => log_l k = ln k / ln l
             k = (self.lambda_param - 1) / np.exp(t) + 1
@@ -298,11 +302,11 @@ class QAM(AveragingFunc):
     """
     def __init__(self, problems, gen: Callable | None = None, inv_gen: Callable | None = None, w_vec: np.ndarray | None = None):
         super().__init__(problems)
-        self.w_vec = np.ones(self.n_dim) if w_vec is None else w_vec
+        self.w_vec = np.ones(self.n_dim) / self.n_dim if w_vec is None else w_vec
         if gen is None or inv_gen is None:
             raise ValueError("A generating function and its inverse are not specified")
         self.gen = gen
-        self.inv_gen = gen
+        self.inv_gen = inv_gen
 
 
     def fun(self, x: np.ndarray):
@@ -310,7 +314,7 @@ class QAM(AveragingFunc):
             raise ValueError(f"The shape of x ({len(x)}) does not match with predefined dimensions ({self.n_dim})")
         s = 0.0
         for i in range(len(x)):
-            s += self.gen(self.w_vec[i] * x[i])
+            s += self.w_vec[i] * self.gen(x[i])
         return self.inv_gen(s)
 
 
@@ -318,7 +322,7 @@ class QAM(AveragingFunc):
 # ================================================== Uninorms ==================================================
 class Uninorm(MixedFunc):
     """
-        Implementation of Uninorms: associative, symmetric and has neutral element, e, in (0, 1)^n. Uninorms exhibit:
+        Implementation of Uninorms: associative, symmetric and has neutral element, e, in (0, 1). Uninorms exhibit:
             1. T-norm   (conjunctive) in [0, e]^n
             2. T-conorm (disjunctive) in [e, 1]^n
             3. Averaging function elsewhere
@@ -328,7 +332,7 @@ class Uninorm(MixedFunc):
         self.is_representable = is_representable
 
 
-    def _func(self, x: float, y: float):
+    def _func(self, x: np.ndarray):
         raise NotImplementedError("Function is not specified")
 
 
@@ -343,11 +347,13 @@ class Uninorm(MixedFunc):
     def fun(self, x: np.ndarray):
         """
             Compute in (for multivariate evaluations):
-                1. Iterative manner, if the function admits
+                1. Directly via _func(x), if the function admits
                 2. Utilisation of univariate, if representable
         """
         if (len(x)) != self.n_dim:
             raise ValueError(f"The shape of x ({len(x)}) does not match with predefined dimensions ({self.n_dim})")
+        if self.absorb is not None and np.any(x == self.absorb):
+            return self.absorb      # absorbing element, resolves -inf + inf of representable uninorms
         if self.is_representable:
             s = 0.0
             for i in range(len(x)):
@@ -363,9 +369,10 @@ class ThreePi(Uninorm):
     """
         Three-Pi function, representable uninorm, (p. 209)
     """
-    def __init__(self, problems, is_representable):
-        super().__init__(problems, is_representable)
-        self.is_representable = True
+    def __init__(self, problems):
+        super().__init__(problems, is_representable=True)
+        self.neutral = 0.5
+        self.absorb = 0         # convention 0/0 = 0, i.e. conjunctive
 
 
     def _func(self, x: np.ndarray):
@@ -379,7 +386,8 @@ class ThreePi(Uninorm):
 
 
     def inv_gen(self, t: float):
-        return np.exp(t) / (np.exp(t) + 1)
+        # more numerically stable, t -> inf => 1, t -> -inf => 0
+        return 1 / (1 + np.exp(-t))     # = e^t / (e^t + 1), divides num and denom by e^x
 
 
 
@@ -388,4 +396,56 @@ class ThreePi(Uninorm):
 
 # ====================================================== TESTING ======================================================
 if __name__ == "__main__":
-    pass
+    import matplotlib.pyplot as plt
+
+    problems = [None, None]     # only len(problems) is used: n = 2, so that f: [0, 1]^2 -> [0, 1] can be drawn
+    groups = {
+        "Basic t-norms": {
+            r"$T_{min}$": SchweizerSklar(problems, -np.inf),        # limiting case, lambda = -inf
+            r"$T_P$": Product(problems),
+            r"$T_L$": Lukasiewicz(problems),
+            r"$T_D$": Drastic(problems),
+        },
+        "Basic t-conorms, N-duals with N(t) = 1 - t": {
+            r"$S_{max}$": SchweizerSklar(problems, -np.inf).dual(),
+            r"$S_P$": Product(problems).dual(),
+            r"$S_L$": Lukasiewicz(problems).dual(),
+            r"$S_D$": Drastic(problems).dual(),
+        },
+        "Schweizer-Sklar t-norms": {rf"$\lambda = {l}$": SchweizerSklar(problems, l) for l in (-5, -1, 0.5, 5)},
+        "Frank t-norms": {rf"$\lambda = {l}$": Frank(problems, l) for l in (0.001, 0.1, 10, 1000)},
+        "Quasi-arithmetic means": {
+            "arithmetic": QAM(problems, gen = lambda t: t, inv_gen = lambda t: t),
+            "geometric, w = (0.3, 0.7)": QAM(problems, gen = np.log, inv_gen = np.exp, w_vec = np.array([0.3, 0.7])),
+            "harmonic": QAM(problems, gen = lambda t: 1 / t, inv_gen = lambda t: 1 / t),
+            "quadratic": QAM(problems, gen = lambda t: t ** 2, inv_gen = np.sqrt),
+        },
+        "Uninorms": {
+            r"3-$\Pi$, e = 0.5": ThreePi(problems),
+        },
+    }
+
+    t = np.linspace(0, 1, 101)
+    X, Y = np.meshgrid(t, t)
+    levels = np.linspace(0, 1, 11)
+    for group, funcs in groups.items():
+        fig = plt.figure(figsize = (4 * len(funcs), 8))
+        for k, (name, f) in enumerate(funcs.items()):
+            # log(0), 1 / 0, ... are expected at the bounds of [0, 1]^2
+            with np.errstate(divide = "ignore", invalid = "ignore", over = "ignore"):
+                Z = np.array([[f.fun(np.array([x, y])) for x, y in zip(xr, yr)] for xr, yr in zip(X, Y)], dtype = float)
+
+            # surface, viewed from the (0, 0) corner
+            ax = fig.add_subplot(2, len(funcs), k + 1, projection = "3d")
+            ax.plot_surface(X, Y, Z, cmap = "viridis", vmin = 0, vmax = 1, linewidth = 0)
+            ax.set(title = name, xlabel = "$x_1$", ylabel = "$x_2$", zlim = (0, 1))
+            ax.view_init(elev = 25, azim = -135)
+
+            # level sets, f(x) = 0, 0.1, ..., 1
+            ax = fig.add_subplot(2, len(funcs), len(funcs) + k + 1)
+            ax.contourf(X, Y, Z, levels = levels, cmap = "viridis")
+            ax.contour(X, Y, Z, levels = levels, colors = "k", linewidths = 0.4)
+            ax.set(xlabel = "$x_1$", ylabel = "$x_2$", aspect = "equal")
+        fig.suptitle(group)
+        fig.tight_layout()
+    plt.show()
