@@ -402,13 +402,13 @@ class Uninorm(MixedFunc):
 
 
 
-class ThreePi(Uninorm):
+class ConjunctiveThreePi(Uninorm):
     """
         Three-Pi function, representable uninorm, (p. 209)
     """
     def __init__(self, problems):
         super().__init__(problems, is_representable=True)
-        self.neutral = 0.5      # Example 1.81, (p. 28)
+        self.neutral = 0.5      # Example 1.81, (p. 28) and Example 4.19 (p. 209)
         self.absorb = 0         # convention 0/0 = 0, i.e. conjunctive uninorm, (pp. 201, 209)
 
 
