@@ -385,6 +385,14 @@ class Uninorm(MixedFunc):
             return self.absorb      # absorbing element, resolves -inf + inf of representable uninorms
         if self.is_representable:
             s = 0.0
+            # resolve egde cases (p. 204), i.e. 0 and 1 simultaneously appearring in x
+            if np.isin([0, 1], x).all():   # Note 4.13 (p. 205) for n-ary representable uninorms
+                if self.absorb == 0:    # conjunctive uninorm (p. 201)
+                    return 0
+                elif self.absorb == 1:  # disjunctive uninorm (p. 202)
+                    return 1
+
+            # do not fall into edge cases
             for i in range(len(x)):
                 s += self.gen(x[i])
             return self.inv_gen(s)
@@ -478,29 +486,31 @@ if __name__ == "__main__":
 
     problems = [None, None]
     groups = {
-        "Basic t-norms": {
-            r"$T_{min}$": SchweizerSklar(problems, -np.inf),        # limiting case, lambda = -inf
-            r"$T_P$": Product(problems),
-            r"$T_L$": Lukasiewicz(problems),
-            r"$T_D$": Drastic(problems),
-        },
-        "Basic t-conorms, N-duals with N(t) = 1 - t": {
-            r"$S_{max}$": SchweizerSklar(problems, -np.inf).dual(),
-            r"$S_P$": Product(problems).dual(),
-            r"$S_L$": Lukasiewicz(problems).dual(),
-            r"$S_D$": Drastic(problems).dual(),
-        },
-        "Schweizer-Sklar t-norms": {rf"$\lambda = {l}$": SchweizerSklar(problems, l) for l in (-5, -1, 0.5, 5)},
-        "Frank t-norms": {rf"$\lambda = {l}$": Frank(problems, l) for l in (0.001, 0.1, 10, 1000)},
-        "Quasi-arithmetic means": {
-            "arithmetic": QAM(problems, gen = lambda t: t, inv_gen = lambda t: t),
-            "geometric, w = (0.3, 0.7)": QAM(problems, gen = np.log, inv_gen = np.exp, w_vec = np.array([0.3, 0.7])),
-            "harmonic": QAM(problems, gen = lambda t: 1 / t, inv_gen = lambda t: 1 / t),
-            "quadratic": QAM(problems, gen = lambda t: t ** 2, inv_gen = np.sqrt),
-        },
-        "Uninorms": {
-            r"3-$\Pi$": ThreePi(problems),
-        },
+        # "Basic t-norms": {
+        #     r"$T_{min}$": SchweizerSklar(problems, -np.inf),        # limiting case, lambda = -inf
+        #     r"$T_P$": Product(problems),
+        #     r"$T_L$": Lukasiewicz(problems),
+        #     r"$T_D$": Drastic(problems),
+        # },
+        # "Basic t-conorms, N-duals with N(t) = 1 - t": {
+        #     r"$S_{max}$": SchweizerSklar(problems, -np.inf).dual(),
+        #     r"$S_P$": Product(problems).dual(),
+        #     r"$S_L$": Lukasiewicz(problems).dual(),
+        #     r"$S_D$": Drastic(problems).dual(),
+        # },
+        "Schweizer-Sklar t-norms (limiting cases)": {rf"$\lambda = {l}$": SchweizerSklar(problems, l) for l in (-np.inf, 0, np.inf)},
+        "Schweizer-Sklar t-norms": {rf"$\lambda = {l}$": SchweizerSklar(problems, l) for l in (-100, -1, 1, 100)},
+        "Frank t-norms (limiting cases)": {rf"$\lambda = {l}$": Frank(problems, l) for l in (0, 1, np.inf)},
+        "Frank t-norms": {rf"$\lambda = {l}$": Frank(problems, l) for l in (1e-9, 1e-4, 1e4, 1e9)},
+        # "Quasi-arithmetic means": {
+        #     "arithmetic": QAM(problems, gen = lambda t: t, inv_gen = lambda t: t),
+        #     "geometric, w = (0.3, 0.7)": QAM(problems, gen = np.log, inv_gen = np.exp, w_vec = np.array([0.3, 0.7])),
+        #     "harmonic": QAM(problems, gen = lambda t: 1 / t, inv_gen = lambda t: 1 / t),
+        #     "quadratic": QAM(problems, gen = lambda t: t ** 2, inv_gen = np.sqrt),
+        # },
+        # "Uninorms": {
+        #     r"3-$\Pi$": ThreePi(problems),
+        # },
     }
 
     for group, funcs in groups.items():
