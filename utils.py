@@ -548,7 +548,7 @@ def visualise(model, kind = "objective", show_true = True, plot_scalarisation = 
         draw(hist, color = "0.6", s = 5 * mag, alpha = 0.35, lw = 0.5,
              label = f"evaluated ({len(hist)}" + (f", {off} off-frame)" if off else ")"))
     if true is not None and (show_true or only_true):
-        draw(true, lines = True, color = "crimson", s = 10 * mag, lw = 0.6, label = "true PF")
+        draw(true, lines = True, color = "crimson", s = 3 * mag, lw = 0.6, label = "true PF")
     if not only_true:
         draw(front, color = "royalblue", s = 3 * mag, lw = 1.2, label = f"non-dominated ({len(front)})")
 
