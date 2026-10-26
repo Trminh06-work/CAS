@@ -140,13 +140,7 @@ class ExtendedProblem(ElementwiseProblem):
 
 class Aggregated(ElementwiseProblem):
     """
-        One objective, made by an aggregation function (agg.py) from the objectives of its problems, which share
-        one decision vector as in ExtendedProblem. An aggregation function acts on [0, 1]^n and is non-decreasing,
-        whereas the objectives are minimised, each on its own scale. So every objective is
-            1. normalised to [0, 1], with bounds fixed here, once, and clipped
-            2. turned into a satisfaction degree, s = 1 - normalised (1 = best)
-        and the aggregate is returned as 1 - A(s), to be minimised. Aggregating the normalised objectives as they are
-        would make a conjunctive A read "one objective at its best is enough": T_P would be 0 wherever ZDT2's f1 is.
+        One objective, made by an aggregation function (agg.py) from the objectives of its problems.
 
         ExtendedProblem wraps an aggregation function in this by itself; construct one directly to give own bounds.
 
@@ -203,11 +197,11 @@ class Aggregated(ElementwiseProblem):
 
     def _evaluate(self, x, out, *args, **kwargs):
         F = self.inner._objectives(x)
-        s = 1 - np.clip((F - self.lo) / (self.hi - self.lo), 0, 1)
+        s = np.clip((F - self.lo) / (self.hi - self.lo), 0, 1) # scale to [0, 1]
 
         # log(0), 1 / 0, ... of the generators are expected at the bounds, s_i = 0 or 1
         with np.errstate(divide = "ignore", over = "ignore"):
-            out["F"] = np.array([1 - self.func.fun(s)], dtype = float)
+            out["F"] = np.array([self.func.fun(s)], dtype = float)
 
 
     def pareto_front(self, n_points = 300):
