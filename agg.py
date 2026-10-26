@@ -421,6 +421,55 @@ class ThreePi(Uninorm):
 
 
 
+# ================================================== Visualisation ==================================================
+def visualise_agg(funcs, title: str | None = None, n_grid: int = 101, show: bool = True):
+    """
+        Bivariate aggregation functions, f: [0, 1]^2 -> [0, 1], one column each: the surface on top and its level sets,
+        f(x) = 0, 0.1, ..., 1, below.
+
+        funcs       {name: AggFunc}, each of arity 2, e.g. {r"$T_P$": Product([None, None])}, or one AggFunc
+        title       of the figure
+        n_grid      grid points per axis of [0, 1]^2
+        show        render the figure before returning
+    """
+    import matplotlib.pyplot as plt
+
+    if isinstance(funcs, AggFunc):
+        funcs = {type(funcs).__name__: funcs}
+
+    t = np.linspace(0, 1, n_grid)
+    X, Y = np.meshgrid(t, t)
+    levels = np.linspace(0, 1, 11)
+    fig = plt.figure(figsize = (4 * len(funcs), 8))
+    for k, (name, f) in enumerate(funcs.items()):
+        # log(0), 1 / 0, ... are expected at the bounds of [0, 1]^2
+        with np.errstate(divide = "ignore", invalid = "ignore", over = "ignore"):
+            Z = np.array([[f.fun(np.array([x, y])) for x, y in zip(xr, yr)] for xr, yr in zip(X, Y)], dtype = float)
+
+        # surface, viewed from the (0, 0) corner
+        ax = fig.add_subplot(2, len(funcs), k + 1, projection = "3d")
+        ax.grid(False)
+        ax.plot_wireframe(X, Y, Z, color = "grey", linewidth = 0.6)
+        ax.set(title = f"{name}\ne = {f.neutral}, a = {f.absorb}", xlabel = "$x_1$", ylabel = "$x_2$", zlim = (0, 1))
+        ax.view_init(elev = 25, azim = -135)
+
+        # level sets, f(x) = 0, 0.1, ..., 1
+        ax = fig.add_subplot(2, len(funcs), len(funcs) + k + 1)
+        cs = ax.contour(X, Y, Z, levels = levels, colors = "grey", linewidths = 0.6)
+
+        d = np.interp(levels, np.diag(Z), t)
+        gap = np.minimum(np.diff(d)[:-1], np.diff(d)[1:])       # to the closer neighbour, for levels 0.1, ..., 0.9
+        ax.clabel(cs, fontsize = 7, manual = [(p, p) for p in d[1:-1][gap >= 0.045]])
+        ax.set(xlabel = "$x_1$", ylabel = "$x_2$", aspect = "equal")
+    if title is not None:
+        fig.suptitle(title)
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+    return fig
+
+
 
 
 # ====================================================== TESTING ======================================================
@@ -454,31 +503,6 @@ if __name__ == "__main__":
         },
     }
 
-    t = np.linspace(0, 1, 101)
-    X, Y = np.meshgrid(t, t)
-    levels = np.linspace(0, 1, 11)
     for group, funcs in groups.items():
-        fig = plt.figure(figsize = (4 * len(funcs), 8))
-        for k, (name, f) in enumerate(funcs.items()):
-            # log(0), 1 / 0, ... are expected at the bounds of [0, 1]^2
-            with np.errstate(divide = "ignore", invalid = "ignore", over = "ignore"):
-                Z = np.array([[f.fun(np.array([x, y])) for x, y in zip(xr, yr)] for xr, yr in zip(X, Y)], dtype = float)
-
-            # surface, viewed from the (0, 0) corner
-            ax = fig.add_subplot(2, len(funcs), k + 1, projection = "3d")
-            ax.grid(False)
-            ax.plot_wireframe(X, Y, Z, color = "grey", linewidth = 0.6)
-            ax.set(title = f"{name}\ne = {f.neutral}, a = {f.absorb}", xlabel = "$x_1$", ylabel = "$x_2$", zlim = (0, 1))
-            ax.view_init(elev = 25, azim = -135)
-
-            # level sets, f(x) = 0, 0.1, ..., 1
-            ax = fig.add_subplot(2, len(funcs), len(funcs) + k + 1)
-            cs = ax.contour(X, Y, Z, levels = levels, colors = "grey", linewidths = 0.6)
-
-            d = np.interp(levels, np.diag(Z), t)
-            gap = np.minimum(np.diff(d)[:-1], np.diff(d)[1:])       # to the closer neighbour, for levels 0.1, ..., 0.9
-            ax.clabel(cs, fontsize = 7, manual = [(p, p) for p in d[1:-1][gap >= 0.045]])
-            ax.set(xlabel = "$x_1$", ylabel = "$x_2$", aspect = "equal")
-        fig.suptitle(group)
-        fig.tight_layout()
-    plt.show()
+        visualise_agg(funcs, group, show = False)
+    plt.show()      # every figure at once
