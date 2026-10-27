@@ -10,10 +10,15 @@ from choquetreg import ChoquetReg
 from slip_interpolant import SLipInterpolant
 import time
 
+
+class _BudgetSpent(Exception):
+    "raised by F() when max_eval is reached - the one place evaluations are counted"
+
+
 class BaseModel(ABC):
     def __init__(self,
         problem: Problem = None, random_state: int = 42, w0: np.ndarray = None,
-        max_iter: int = 50, tol: float = 1e-3, solver: str = "L-BFGS-B"
+        max_iter: int = 50, max_eval: int = 10_000, tol: float = 1e-3, solver: str = "L-BFGS-B"
     ):
         if problem is None:
             raise ValueError("Problem is not specified")
@@ -46,8 +51,9 @@ class BaseModel(ABC):
         self.wallclock_time: float = np.nan     # seconds in solve(); stays nan unless it finished
 
         # Termination criteria
-        self.max_iter: int = max_iter
-        self.tol: float = tol
+        self.max_iter: int = max_iter           # outer iterations threshold
+        self.max_eval: int = max_eval           # number of function evaluations threshold
+        self.tol: float = tol                   # solvers' tolerance threshold
 
 
     def learn_weight(self):
@@ -95,6 +101,9 @@ class BaseModel(ABC):
 
 
     def F(self, x, w):
+        if self.num_func_eval >= self.max_eval:     # the budget is spent - abandon the solver call
+            raise _BudgetSpent
+
         # Ensure the current point is within the problem's feasible region
         # Assume the feasible region is box constraints
         xl, xu = self.problem.xl, self.problem.xu
@@ -165,6 +174,14 @@ class BaseModel(ABC):
         self._worst = np.max(self.PF, axis = 0)
 
 
+    def _search(self, call):
+        try:
+            call()
+        except Exception:
+            if self.num_func_eval < self.max_eval:
+                raise
+
+
     def solve(self, callback = None):
         # keep the search inside the box the test problem is defined on
         bounds = list(zip(self.problem.xl, self.problem.xu)) if self.problem.xl is not None else None
@@ -186,8 +203,8 @@ class BaseModel(ABC):
 
         # DIRECT solver
         # Use the given weight vector first
-        direct(self.F, args = (self.w,),  # solve using scalarised F
-                bounds = bounds, maxiter = self.PS_dim * 20)
+        self._search(lambda: direct(self.F, args = (self.w,),  # solve using scalarised F
+                                    bounds = bounds, maxiter = self.PS_dim * 20))
         # Then apply multi-start weight vectors
         # for _ in range(self.max_iter * 100):
         #     w = self.rng.dirichlet(np.ones(self.PF_dim))     # no repeated vector, \sum_{w_i} = 1 and w_i > 0
@@ -216,19 +233,23 @@ class BaseModel(ABC):
             if it % 5 == 0:
                 # DIRECT solver
                 # -> no need multi-start
-                direct(self.F, args = (self.w,),  # solve using scalarised F
-                        bounds = bounds, maxiter = self.PS_dim * 20)
+                self._search(lambda: direct(self.F, args = (self.w,),  # solve using scalarised F
+                                            bounds = bounds, maxiter = self.PS_dim * 20))
             else:
                 # Other NLP solvers
                 for _ in range(5 * self.PS_dim):
                     x = lo + (hi - lo) * self.rng.random(self.PS_dim)            # random intial point for solver
-                    minimize(self.F, x, args = (self.w,), method = self.solver,  # solve using scalarised F
-                            bounds = bounds, tol = self.tol, options={'eps':0.001,'maxiter': 50})
+                    self._search(lambda: minimize(self.F, x, args = (self.w,), method = self.solver,  # solve using scalarised F
+                                                bounds = bounds, tol = self.tol, options={'eps':0.001,'maxiter': 50}))
+                    if self.num_func_eval >= self.max_eval:
+                        break
 
             # Filter out the non-dominated points obtained -> current PF and PS approximation
             self.filter_PF_PS()
             if callback is not None:
                 callback(self, "eval")
+            if self.num_func_eval >= self.max_eval: # stop when the # func. eval. budget is reached
+                break
 
         self.wallclock_time = time.perf_counter() - start
 
