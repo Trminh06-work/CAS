@@ -26,13 +26,26 @@ def evaluate(models_arr: List[BaseModel]):
         return A[np.all(np.isfinite(A), 1)]
 
 
-    def find_nadir(in_space: str = "objective", use_all: bool = False):
+    def find_nadir(use_problem_nadir: bool = True, in_space: str = "objective", use_all: bool = False):
         """
-            Use model.obj_hist / model.dec_hist to find nadir point
+            Either use problem's PF or model.obj_hist / model.dec_hist or model.PF / model.PS to find nadir point
 
-            Parameter
-                in_space: str, default = "objective". Possible values: "objective", "decision"
+            Parameters:
+                    use_problem_nadir (bool, optional): use problem's PF to obtain nadir point, if available
+                    in_space (str, optional): the space in which it operates, either `"objective"` or `"decision"`. Defaults to `"objective"`.
+                    use_all (bool, optional): decide to select the nadir point from either all points found or only non-dominated points
         """
+        # use problem's PF -> nadir point, if unavailable, fallback to default nadir selection
+        if use_problem_nadir:
+            try:
+                if in_space == "objective":
+                    H = np.vstack([finite(m.problem.pareto_front()) for m in models_arr])
+                else:
+                    H = np.vstack([finite(m.problem.pareto_set()) for m in models_arr])
+                return H.max(0) + 0.1 * (H.max(0) - H.min(0))   # +10% to widen the regions
+            except Exception:
+                print("No available problem's PF, fallback to default nadir selection")
+
         # worst value per objective over every evaluation any model made, so the reference is shared and the hypervolumes compare
         if use_all:
             # Use all evaluated points to find the nadir
