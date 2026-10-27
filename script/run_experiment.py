@@ -11,11 +11,11 @@
     the matching logs/trace_<...>.log - what each iteration learnt and the evaluations it made.
 
     5 pieces of information about Hypervolume:
-        hv_own      : the hypervolume on that run's own front       (after running a task, i.e. --index #)
-        hypervolume : comparable HV using one reference nadir point (after running --aggregate)
-        hv_ref      : the reference nadir point for `hypervolume`   (after running --aggregate)
-        hv_rank     : ranking of models according to `hypervolume`  (after running --aggregate)
-        hv_models   : number of models involved in HV calculation   (after running --aggregate)
+        hv_own      : the HV of that run alone, same reference point (after running a task, i.e. --index #)
+        hypervolume : comparable HV using one reference nadir point  (after running --aggregate)
+        hv_ref      : the reference nadir point for `hypervolume`    (after running --aggregate)
+        hv_rank     : ranking of models according to `hypervolume`   (after running --aggregate)
+        hv_models   : number of models involved in HV calculation    (after running --aggregate)
 """
 import argparse, inspect, io, contextlib, glob, os, re, sys, traceback
 
@@ -171,6 +171,19 @@ def finite(A):
     return A[np.all(np.isfinite(A), 1)]
 
 
+def ref_point(problem):
+    """
+        The box the hypervolume is measured in: the problem's own front, widened by 10% of its range.
+
+        None when the problem has no analytical front.
+    """
+    try:
+        pf = finite(problem.pareto_front())
+        return pf.max(0) + 0.1 * (pf.max(0) - pf.min(0))        # +10% to widen the region
+    except Exception:
+        return None
+
+
 def run(task, conf, results_dir, logs_dir = None, trace_rows = 50, live = False):
     from pymoo.indicators.hv import HV
 
@@ -211,13 +224,15 @@ def run(task, conf, results_dir, logs_dir = None, trace_rows = 50, live = False)
 
     if model.PF is not None and len(model.PF):
         PF, row["archive"] = finite(model.PF), len(finite(model.PF))
+        ref = ref_point(problem)        # saved only when it is the problem's, so shared by construction
         np.savez_compressed(os.path.join(results_dir, stem(task) + ".npz"),
                             PF = PF, PS = model.PS, obj_hist = finite(model.obj_hist),
                             iter_hist = model.iter_hist, w_hist = model.w_hist,
-                            scal_hist = np.asarray(model.scal_hist, dtype = float))
+                            scal_hist = np.asarray(model.scal_hist, dtype = float),
+                            **({} if ref is None else dict(ref = ref)))
         if len(PF):
-            # hv_own: the HV of the model alone, extracting from itself, no comparison with others
-            row["hv_own"] = float(HV(ref_point = PF.max(0))(PF))
+            # hv_own: this run alone, in the problem's own box when it has one, else its own
+            row["hv_own"] = float(HV(ref_point = PF.max(0) if ref is None else ref)(PF))
 
     return row
 
@@ -226,9 +241,10 @@ def aggregate(results_dir):
     """
         A task is: ("problem", "n_dim", "n_obj", "seed") -> comparable among models
 
-        Merge the per-task rows and compute per-task hypervolume. The per-task HV is computed by:
-        using the nadir reference point as worst value per objective over the non-dominated points,
-        i.e. find_nadir(use_all = False), pooled over the models of one (problem, n_dim, n_obj, seed).
+        Merge the per-task rows and compute per-task hypervolume, against the reference point
+        run() saved with the archive: the problem's own front widened by 10%, or - for a problem
+        with no analytical front - the worst value per objective over the non-dominated points,
+        pooled over the models of one (problem, n_dim, n_obj, seed).
 
         One seed is one experiment: its models share a reference point.
         Compare models within a seed and aggregate across seeds by rank, i.e. hv_rank,
@@ -242,10 +258,15 @@ def aggregate(results_dir):
         raise SystemExit(f"no per-task csv files in {results_dir}")
     table = pd.concat(rows, ignore_index = True)
 
-    archives = {key: np.load(path)["PF"]
-                for key, path in ((tuple(r), os.path.join(results_dir, stem(tuple(r)) + ".npz"))
-                                  for r in table[["model", "problem", "n_dim", "n_obj", "seed"]].values)
-                if os.path.exists(path)}
+    def load(path):
+        with np.load(path) as handle:       # the archive, and the box run() measured it in
+            return handle["PF"], (handle["ref"] if "ref" in handle else None)
+
+    saved = {key: load(path)
+             for key, path in ((tuple(r), os.path.join(results_dir, stem(tuple(r)) + ".npz"))
+                               for r in table[["model", "problem", "n_dim", "n_obj", "seed"]].values)
+             if os.path.exists(path)}
+    archives = {key: PF for key, (PF, _) in saved.items()}
 
     table["hypervolume"] = np.nan
     # group_key does not include the models
@@ -254,7 +275,9 @@ def aggregate(results_dir):
         keys = [k for k in archives if k[1:] == group_key]
         if not keys:
             continue
-        ref = np.vstack([archives[k] for k in keys]).max(0)
+        # every model of a group shares one problem, so they all saved the same reference
+        ref = next((saved[k][1] for k in keys if saved[k][1] is not None),
+                   np.vstack([archives[k] for k in keys]).max(0))
         hv = HV(ref_point = ref)
         table.loc[group.index, "hv_ref"] = " ".join(f"{v:.6g}" for v in ref)
         table.loc[group.index, "hv_models"] = len(keys)
