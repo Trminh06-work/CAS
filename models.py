@@ -18,7 +18,7 @@ class _BudgetSpent(Exception):
 class BaseModel(ABC):
     def __init__(self,
         problem: Problem = None, random_state: int = 42, w0: np.ndarray = None,
-        max_iter: int = 50, max_eval: int = 10_000, tol: float = 1e-3, solver: str = "L-BFGS-B"
+        max_iter: int = 50, max_eval: int = 100_000, tol: float = 1e-3, solver: str = "L-BFGS-B"
     ):
         if problem is None:
             raise ValueError("Problem is not specified")
