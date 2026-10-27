@@ -1,5 +1,5 @@
 """
-    One configuration of the benchmark - one model, one problem, one seed.
+    One configuration of the benchmark - one model, one problem, one seed, one solver.
 
         python run_experiment.py --conf job.conf --count       how many tasks the grid expands to
         python run_experiment.py --conf job.conf --list        the task list, each line led by its index
@@ -7,7 +7,7 @@
         python run_experiment.py --conf job.conf --index 7 --live   ... and trace it as it goes
         python run_experiment.py --conf job.conf --aggregate   merge the rows -> results/summary.csv
 
-    A task writes results/<model>_<problem>_d<n_dim>_m<n_obj>_s<seed>.{csv,npz}, and under --live
+    A task writes results/<model>_<problem>_d<n_dim>_m<n_obj>_s<seed>_<solver>.{csv,npz}, under --live
     the matching logs/trace_<...>.log - what each iteration learnt and the evaluations it made.
 
     5 pieces of information about Hypervolume:
@@ -133,7 +133,7 @@ def build_agg(name, n_dim, conf):
 
 def tasks(conf):
     """
-        Every (model, problem, n_dim, n_obj, seed) the grid covers,
+        Every (model, problem, n_dim, n_obj, seed, solver) the grid covers,
         in the order the conf lists the problems.
 
         - Problems with fixed n_dim: may take dec_dims in conf, but ignore during evaluations
@@ -142,7 +142,7 @@ def tasks(conf):
     import tests                    # for the sizes the problem classes fix themselves
 
     dec_dims, obj_dims = ([int(v) for v in conf[k]] for k in ("dec_dims", "obj_dims"))
-    seeds = [int(v) for v in conf["seeds"]]
+    seeds, solvers = [int(v) for v in conf["seeds"]], conf["solvers"]
 
     out = []
     for problem in conf["problems"] + list(combos(conf)):
@@ -156,13 +156,14 @@ def tasks(conf):
             for n_obj in (obj_dims if chosen else [build_problem(problem, n_dim, None, conf).n_obj]):
                 if chosen and n_dim <= n_obj:
                     continue
-                out += [(model, problem, n_dim, n_obj, seed)
-                        for model in conf["models"] for seed in seeds]
+                out += [(model, problem, n_dim, n_obj, seed, solver)
+                        for model in conf["models"] for seed in seeds for solver in solvers]
     return out
 
 
 def stem(task):
-    return "{}_{}_d{}_m{}_s{}".format(*task)
+    # the solver goes last, so aggregate() can still match a key to its group by dropping the model
+    return "{}_{}_d{}_m{}_s{}_{}".format(*task)
 
 
 def finite(A):
@@ -187,17 +188,19 @@ def ref_point(problem):
 def run(task, conf, results_dir, logs_dir = None, trace_rows = 50, live = False):
     from pymoo.indicators.hv import HV
 
-    model_key, problem_name, n_dim, n_obj, seed = task
+    model_key, problem_name, n_dim, n_obj, seed, solver = task
     max_iter = int(conf["max_iter"][0])
+    max_eval = int(conf["max_eval"][0])
 
     problem = build_problem(problem_name, n_dim, n_obj, conf)
     extra = (dict(method = int(conf["cas_method"][0])) if model_key == "cas" else
              dict(type = conf["las_type"][0]) if model_key == "las" else {})
     model = getattr(models, MODELS[model_key])(
-        problem = problem, max_iter = max_iter, random_state = seed, **extra)
+        problem = problem, max_iter = max_iter, max_eval = max_eval, random_state = seed,
+        solver = solver, **extra)
 
     row = dict(model = model_key, problem = problem_name, n_dim = n_dim, n_obj = n_obj, seed = seed,
-               max_iter = max_iter, status = "ok")
+               solver = solver, max_iter = max_iter, max_eval = max_eval, status = "ok")
     if problem.n_obj != n_obj:
         row["status"] = f"n_obj mismatch: grid says {n_obj}, {problem_name} builds {problem.n_obj}"
 
@@ -239,12 +242,12 @@ def run(task, conf, results_dir, logs_dir = None, trace_rows = 50, live = False)
 
 def aggregate(results_dir):
     """
-        A task is: ("problem", "n_dim", "n_obj", "seed") -> comparable among models
+        A task is: ("problem", "n_dim", "n_obj", "seed", "solver") -> comparable among models
 
         Merge the per-task rows and compute per-task hypervolume, against the reference point
         run() saved with the archive: the problem's own front widened by 10%, or - for a problem
         with no analytical front - the worst value per objective over the non-dominated points,
-        pooled over the models of one (problem, n_dim, n_obj, seed).
+        pooled over the models of one (problem, n_dim, n_obj, seed, solver).
 
         One seed is one experiment: its models share a reference point.
         Compare models within a seed and aggregate across seeds by rank, i.e. hv_rank,
@@ -264,14 +267,14 @@ def aggregate(results_dir):
 
     saved = {key: load(path)
              for key, path in ((tuple(r), os.path.join(results_dir, stem(tuple(r)) + ".npz"))
-                               for r in table[["model", "problem", "n_dim", "n_obj", "seed"]].values)
+                               for r in table[["model", "problem", "n_dim", "n_obj", "seed", "solver"]].values)
              if os.path.exists(path)}
     archives = {key: PF for key, (PF, _) in saved.items()}
 
     table["hypervolume"] = np.nan
     # group_key does not include the models
-    # group_key: ("problem", "n_dim", "n_obj", "seed")
-    for group_key, group in table.groupby(["problem", "n_dim", "n_obj", "seed"]):
+    # group_key: ("problem", "n_dim", "n_obj", "seed", "solver")
+    for group_key, group in table.groupby(["problem", "n_dim", "n_obj", "seed", "solver"]):
         keys = [k for k in archives if k[1:] == group_key]
         if not keys:
             continue
@@ -285,7 +288,7 @@ def aggregate(results_dir):
             float(hv(archives[k])) if k in archives else np.nan
             for k in ((m, *group_key) for m in group.model)]
 
-    table["hv_rank"] = table.groupby(["problem", "n_dim", "n_obj", "seed"])["hypervolume"] \
+    table["hv_rank"] = table.groupby(["problem", "n_dim", "n_obj", "seed", "solver"])["hypervolume"] \
                             .rank(ascending = False, method = "min")      # 1 = largest, within a seed
 
     out = os.path.join(results_dir, "summary.csv")
