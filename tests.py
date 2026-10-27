@@ -187,7 +187,7 @@ class Aggregated(ElementwiseProblem):
                 front = p.pareto_front()
                 if front is not None:
                     lo[j:j + p.n_obj] = np.min(np.atleast_2d(front), axis = 0)
-            except NotImplementedError:
+            except Exception:       # no known front: NotImplementedError, or pymoo's bare Exception past 3 objectives
                 pass
             j += p.n_obj
 
@@ -405,6 +405,115 @@ class DTLZ2(Problem):
         X = np.full((n_points, self.n_dim), 0.5)
         X[:, :self.n_obj - 1] = rng.random((n_points, self.n_obj - 1))
         return X
+
+
+
+# =============================== WFG Problems ===============================
+class WFG(Problem):
+    """
+    Base for WFG1-9 (Huband et al., 2006), adopted from pymoo.
+
+    WFG's own box is 0 <= zi <= 2i, i = 1, ..., n_dim; it is searched on the unit box, and zi = 2i xi applied in _evaluate
+    """
+    def __init__(self, name: str, n_dim: int = 10, n_obj: int = 3):
+        super().__init__(name, n_var = n_dim, n_obj = n_obj)
+
+        # searched on the unit box; WFG's own [0, 2i] is applied in _evaluate
+        self.lo, self.hi = self.inner.xl, self.inner.xu
+        self.xl, self.xu = np.zeros(self.n_dim), np.ones(self.n_dim)
+
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        out["F"] = self.inner.evaluate(to_domain(x, self.lo, self.hi))
+
+
+    @staticmethod
+    def _non_dominated(F):
+        "Boolean mask of the non-dominated rows of F - BaseModel.non_dominated()'s 'strongly', one copy per objective vector"
+        keep, front = np.zeros(len(F), bool), np.empty((0, F.shape[1]))
+        # in lexicographic order a point can only be dominated by one before it
+        for i in np.lexsort(F.T[::-1]):
+            if not np.any(np.all(front <= F[i], 1)):
+                keep[i], front = True, np.vstack([front, F[i]])
+        return keep
+
+
+    def pareto_front(self, n_points = 300):
+        # pymoo's front for WFG is not non-dominated at all -> filter again
+        F = self.inner.pareto_front()
+        return F[self._non_dominated(F)]
+
+
+    def pareto_set(self, n_points = 300):
+        # pymoo's optimal points, back in the unit box: the 2^k extremes of the position variables, then random ones;
+        extremes = self.inner._calc_pareto_set_extremes()
+        K = self.inner._rand_optimal_position(max(n_points - len(extremes), 0), random_state = np.random.default_rng(0))
+        X = np.vstack([extremes, self.inner._positional_to_optimal(K)])
+        X = X[self._non_dominated(self.inner.evaluate(X))]
+        return (X - self.lo) / (self.hi - self.lo)
+
+
+
+class WFG1(WFG):
+    "convex and mixed front; separable, unimodal; flat and polynomial bias"
+    def __init__(self, n_dim = 10, n_obj = 3):
+        super().__init__("wfg1", n_dim = n_dim, n_obj = n_obj)
+
+
+
+class WFG2(WFG):
+    "convex and disconnected front; non-separable, multimodal in the last objective"
+    def __init__(self, n_dim = 10, n_obj = 3):
+        super().__init__("wfg2", n_dim = n_dim, n_obj = n_obj)
+
+
+
+class WFG3(WFG):
+    "linear and degenerate front; non-separable, unimodal"
+    def __init__(self, n_dim = 10, n_obj = 3):
+        super().__init__("wfg3", n_dim = n_dim, n_obj = n_obj)
+
+
+
+class WFG4(WFG):
+    "concave front; separable, multimodal"
+    def __init__(self, n_dim = 10, n_obj = 3):
+        super().__init__("wfg4", n_dim = n_dim, n_obj = n_obj)
+
+
+
+class WFG5(WFG):
+    "concave front; separable, deceptive"
+    def __init__(self, n_dim = 10, n_obj = 3):
+        super().__init__("wfg5", n_dim = n_dim, n_obj = n_obj)
+
+
+
+class WFG6(WFG):
+    "concave front; non-separable, unimodal"
+    def __init__(self, n_dim = 10, n_obj = 3):
+        super().__init__("wfg6", n_dim = n_dim, n_obj = n_obj)
+
+
+
+class WFG7(WFG):
+    "concave front; separable, unimodal; parameter-dependent bias"
+    def __init__(self, n_dim = 10, n_obj = 3):
+        super().__init__("wfg7", n_dim = n_dim, n_obj = n_obj)
+
+
+
+class WFG8(WFG):
+    "concave front; non-separable, unimodal; parameter-dependent bias"
+    def __init__(self, n_dim = 10, n_obj = 3):
+        super().__init__("wfg8", n_dim = n_dim, n_obj = n_obj)
+
+
+
+class WFG9(WFG):
+    "concave front; non-separable, multimodal and deceptive; parameter-dependent bias"
+    def __init__(self, n_dim = 10, n_obj = 3):
+        super().__init__("wfg9", n_dim = n_dim, n_obj = n_obj)
 
 
 
