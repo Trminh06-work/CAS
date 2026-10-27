@@ -1,10 +1,10 @@
 """
     Plot a task's result from its .npz.
 
-        python plot_from_npz.py results/cas_ZDT1_d10_m2_s0.npz
-        python plot_from_npz.py results/las_ZDT1_d10_m3_s0.npz --kind learning --level-sets
-        python plot_from_npz.py results/baseline_ZDT1_d10_m2_s0.npz --kind true_pf
-        python plot_from_npz.py results/cas_ZDT1_d10_m2_s0.npz --save front.png
+        python plot_from_npz.py results/cas_ZDT1_d10_m2_s0_L-BFGS-B.npz
+        python plot_from_npz.py results/las_ZDT1_d10_m3_s0_Powell.npz --kind learning --level-sets
+        python plot_from_npz.py results/baseline_ZDT1_d10_m2_s0_SLSQP.npz --kind true_pf
+        python plot_from_npz.py results/cas_ZDT1_d10_m2_s0_L-BFGS-B.npz --save front.png
 
     The .npz does not contain models' states, hence refitting the models.
 """
@@ -63,19 +63,20 @@ def main():
                                          "(learning is plotly: .html, or an image if kaleido is installed)")
     args = parser.parse_args()
 
-    # <model>_<problem>_d<n_dim>_m<n_obj>_s<seed>, as run_experiment.stem() writes it
+    # <model>_<problem>_d<n_dim>_m<n_obj>_s<seed>_<solver>, as run_experiment.stem() writes it
     name = os.path.basename(args.npz).removesuffix(".npz")
-    match = re.fullmatch(rf"({'|'.join(MODELS)})_(.+)_d(\d+)_m(\d+)_s(\d+)", name)
+    match = re.fullmatch(rf"({'|'.join(MODELS)})_(.+)_d(\d+)_m(\d+)_s(\d+)_(.+)", name)
     if match is None:
-        parser.error(f"{name}: not a <model>_<problem>_d<n>_m<n>_s<n> file name")
-    model_key, problem_name, n_dim, n_obj, seed = match.groups()
+        parser.error(f"{name}: not a <model>_<problem>_d<n>_m<n>_s<n>_<solver> file name")
+    model_key, problem_name, n_dim, n_obj, seed, solver = match.groups()
 
     # the model as run_experiment.run() builds it - the replayed fit depends on these settings
     conf = read_conf(args.conf)
     extra = (dict(method = int(conf["cas_method"][0])) if model_key == "cas" else
              dict(type = conf["las_type"][0]) if model_key == "las" else {})
     problem = build_problem(problem_name, int(n_dim), int(n_obj), conf)
-    model = getattr(models, MODELS[model_key])(problem = problem, random_state = int(seed), **extra)
+    model = getattr(models, MODELS[model_key])(problem = problem, random_state = int(seed),
+                                               solver = solver, **extra)
 
     data = np.load(args.npz)
     for key in data.files:
