@@ -17,7 +17,7 @@
         hv_rank     : ranking of models according to `hypervolume`  (after running --aggregate)
         hv_models   : number of models involved in HV calculation   (after running --aggregate)
 """
-import argparse, inspect, io, contextlib, glob, os, sys, traceback
+import argparse, inspect, io, contextlib, glob, os, re, sys, traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))        # the models live one level up
@@ -50,9 +50,29 @@ def read_conf(path):
 def combos(conf):
     """
         combo_<name> = A, B, C in the conf is one ExtendedProblem joining those problems in that
-        order, and combo_<name>_order = 2, 0, 3 keeps and reorders its objectives.
+        order, and combo_<name>_order = 2, 0, 3 keeps and reorders its objectives. A part may be
+        an aggregation, agg_<name>.
     """
     return {k: v for k, v in conf.items() if k.startswith("combo_") and not k.endswith("_order")}
+
+
+def aggs(conf):
+    """
+        agg_<name> = Function(p), A, B in the conf is that aggregation function (agg.py) of the
+        objectives of A, B, ... - one objective, so it is used as a part of a combination.
+    """
+    return {k: v for k, v in conf.items() if k.startswith("agg_") and not k.endswith("_weights")}
+
+
+def leaves(name, conf):
+    "the problem classes behind a name, through the combinations and aggregations it is made of"
+    if name in combos(conf):
+        parts = combos(conf)[name]
+    elif name in aggs(conf):
+        parts = aggs(conf)[name][1:]        # past the function
+    else:
+        return [name]
+    return [leaf for part in parts for leaf in leaves(part, conf)]
 
 
 def takes_n_obj(name, conf):
@@ -71,12 +91,44 @@ def build_problem(name, n_dim, n_obj, conf):
         build = getattr(tests, name)
         return build(n_dim = n_dim, n_obj = n_obj) if takes_n_obj(name, conf) else build(n_dim = n_dim)
 
-    joined = []
-    for part in parts:      # a part fixing its own size goes in bare, the rest take this n_dim
-        cls = getattr(tests, part)
-        joined.append(cls if getattr(cls, "N_VAR", None) else cls(n_dim = n_dim))
-    return tests.ExtendedProblem(problems = joined,
+    return tests.ExtendedProblem(problems = [build_part(part, n_dim, conf) for part in parts],
                                  order = [int(v) for v in conf.get(name + "_order", [])] or None)
+
+
+def build_part(part, n_dim, conf):
+    "a part of a combination or an aggregation: an aggregation, or a problem that takes this n_dim"
+    import tests
+
+    if part in aggs(conf):
+        return build_agg(part, n_dim, conf)
+    cls = getattr(tests, part)      # a part fixing its own size goes in bare
+    return cls if getattr(cls, "N_VAR", None) else cls(n_dim = n_dim)
+
+
+def build_agg(name, n_dim, conf):
+    """
+        The function of agg_<name> is written Function, Function(p) or Function(p).dual:
+            p       lambda_param of SchweizerSklar and Frank
+            p       r of QAM, the weighted power mean: g(t) = t^r, or log(t) if r = 0, 1 by default (p. 48)
+            .dual   the t-conorm, N-dual of the t-norm with N(t) = 1 - t
+    """
+    import agg
+
+    spec, *parts = aggs(conf)[name]
+    match = re.fullmatch(r"(\w+)(?:\((.+)\))?(\.dual)?", spec.replace(" ", ""))
+    if match is None:
+        raise SystemExit(f"{name}: cannot read the function {spec!r}")
+    cls, param = getattr(agg, match[1]), None if match[2] is None else float(match[2])
+    problems = [build_part(part, n_dim, conf) for part in parts]
+
+    if cls is agg.QAM:
+        r = 1.0 if param is None else param
+        gen, inv_gen = (np.log, np.exp) if r == 0 else (lambda t: t ** r, lambda s: s ** (1 / r))
+        w = conf.get(name + "_weights")
+        func = cls(problems, gen = gen, inv_gen = inv_gen, w_vec = [float(v) for v in w] if w else None)
+    else:
+        func = cls(problems) if param is None else cls(problems, param)
+    return func.dual() if match[3] else func
 
 
 def tasks(conf):
@@ -94,8 +146,9 @@ def tasks(conf):
 
     out = []
     for problem in conf["problems"] + list(combos(conf)):
-        parts = combos(conf).get(problem)
-        sizes = [getattr(getattr(tests, p), "N_VAR", None) for p in (parts or [problem])]
+        if problem in aggs(conf):
+            raise SystemExit(f"{problem} is one objective: use it in a combination, e.g. combo_<name> = ZDT2, {problem}")
+        sizes = [getattr(getattr(tests, p), "N_VAR", None) for p in leaves(problem, conf)]
         fixed = max(sizes) if all(sizes) else None
         chosen = takes_n_obj(problem, conf)
         for n_dim in ([fixed] if fixed else dec_dims):

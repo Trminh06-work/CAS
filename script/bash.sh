@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=AS_sweep             # baseline / CAS / LAS adaptive scalarisation sweep
-#SBATCH --array=0-989                   # one task per line of `run_experiment.py --list` (see job.conf)
+#SBATCH --array=0-53                    # one task per line of `run_experiment.py --list` (see job.conf)
 #SBATCH --ntasks=1                      # We are planning to run one task
 #SBATCH --nodes=1                       # We request the use of 1 compute node for this task
 #SBATCH --cpus-per-task=1               # nothing here threads, and 1 core per task lets every
