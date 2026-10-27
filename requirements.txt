@@ -14,5 +14,5 @@ matplotlib==3.10.8
 seaborn==0.13.2
 plotly==6.9.0
 
-# to run pymoo_lab.ipynb
+# to run lab.ipynb
 ipykernel==7.1.0
