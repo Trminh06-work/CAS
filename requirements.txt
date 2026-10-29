@@ -9,6 +9,9 @@ pymoo==0.6.2
 # Choquet integral / fuzzy measure fitting, used by choquetreg.py
 pyfmtools==5.3.9
 
+# block-wise non-dominated filtering in nd_torch.py, used by models.py
+torch==2.9.1
+
 # plotting
 matplotlib==3.10.8
 seaborn==0.13.2

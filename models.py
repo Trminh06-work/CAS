@@ -8,6 +8,7 @@ from tests import Problem
 import pyfmtools as fm
 from choquetreg import ChoquetReg
 from slip_interpolant import SLipInterpolant
+from nd_torch import non_dominated_mask_gpu
 import time
 
 
@@ -141,11 +142,10 @@ class BaseModel(ABC):
 
         match kind:
             case "strongly":
-                # in lexicographic order a point can only be dominated by one before it
-                # the lexsort here is to speed-up the filtering
-                for i in np.lexsort(obj.T[::-1]):
-                    if not np.any(np.all(front <= obj[i], 1)):
-                        keep[i], front = True, np.vstack([front, obj[i]])
+                # nd_torch compares in blocks and keeps every copy of a repeated point,
+                # so it is handed one copy of each, marked back on its first occurrence
+                uniq, first = np.unique(obj, axis = 0, return_index = True)
+                keep[first[non_dominated_mask_gpu(uniq)[0]]] = True
             case "eps":
                 if np.any(np.asarray(eps) < 0):
                     raise ValueError("eps must be non-negative")
