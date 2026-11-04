@@ -1,12 +1,11 @@
 import pyfmtools as fm
 import math
-
 import numpy as np
+from itertools import combinations
+from scipy.optimize import linprog
+from scipy.sparse import lil_matrix, csr_matrix, vstack
 
 from scipy.optimize import minimize  # Nelder-Mead, or use cma package for CMA-ES
-
-from scipy.optimize import linprog
-from itertools import combinations
 
 def estimate_a_lower_tail(X, y, quantile=0.2, eps=1e-8):
     """
@@ -48,6 +47,10 @@ def solve_lp(Xy, p, enforceone=True):
          Xy[:, :n] = X  (features)
          Xy[:, -1] = y  (targets)
     p  : scalar penalty parameter
+
+    Sparse version: builds A_eq, A_ub as scipy sparse matrices instead
+    of dense numpy arrays, since each row only touches a handful of
+    the N decision variables (not all of them).
     """
     Xy_np = np.asarray(Xy, dtype=np.float64)
     X = Xy_np[:, :-1]   # (K, n)
@@ -77,7 +80,7 @@ def solve_lp(Xy, p, enforceone=True):
     N = 2*K + n + 2*P
 
     # --------------------------------------------------
-    # objective: min sum(t+) + sum(t-) + p*sum(m+ + m-)
+    # objective (dense -- it's just a vector, no need for sparse here)
     # --------------------------------------------------
     c_obj = np.zeros(N)
     c_obj[idx_tp] = 1.0
@@ -86,71 +89,59 @@ def solve_lp(Xy, p, enforceone=True):
     c_obj[idx_mm] = p
 
     # --------------------------------------------------
-    # equality constraints
+    # equality constraints -- build as LIL (efficient row assignment),
+    # convert to CSR at the end (efficient for linprog/solver use)
     # --------------------------------------------------
-    A_eq_rows = []
-    b_eq_rows = []
+    n_eq_rows = K + (1 if enforceone else 0)
+    A_eq = lil_matrix((n_eq_rows, N))
+    b_eq = np.zeros(n_eq_rows)
 
-    # 1) for each k=1..K:
-    # t+_k - t-_k - sum_i x_ki*m_i
-    #   - sum_{i<j} (m+_ij - m-_ij)*min(x_ki, x_kj) = -y_k
     for k in range(K):
-        row = np.zeros(N)
-        row[idx_tp.start + k] =  1.0    # t+_k
-        row[idx_tm.start + k] = -1.0    # t-_k
+        A_eq[k, idx_tp.start + k] = 1.0
+        A_eq[k, idx_tm.start + k] = -1.0
         for i in range(n):
-            row[idx_m.start + i] = -X[k, i]
+            A_eq[k, idx_m.start + i] = -X[k, i]
         for p_idx, (i, j) in enumerate(pairs):
             v = min(X[k, i], X[k, j])
-            row[idx_mp.start + p_idx] = -v   # -m+_ij * min(...)
-            row[idx_mm.start + p_idx] =  v   #  m-_ij * min(...)
-        A_eq_rows.append(row)
-        b_eq_rows.append(-y[k])
+            A_eq[k, idx_mp.start + p_idx] = -v
+            A_eq[k, idx_mm.start + p_idx] = v
+        b_eq[k] = -y[k]
 
     if enforceone:
-        # 2) sum_i m_i + sum_{i<j} (m+_ij - m-_ij) = 1
-        row = np.zeros(N)
-        row[idx_m]  =  1.0
-        row[idx_mp] =  1.0
-        row[idx_mm] = -1.0
-        A_eq_rows.append(row)
-        b_eq_rows.append(1.0)
+        row = K
+        for i in range(n):
+            A_eq[row, idx_m.start + i] = 1.0
+        for p_idx in range(P):
+            A_eq[row, idx_mp.start + p_idx] = 1.0
+            A_eq[row, idx_mm.start + p_idx] = -1.0
+        b_eq[row] = 1.0
 
-    A_eq = np.array(A_eq_rows)
-    b_eq = np.array(b_eq_rows)
+    A_eq = A_eq.tocsr()
 
     # --------------------------------------------------
     # inequality constraints
     # --------------------------------------------------
-    A_ub_rows = []
-    b_ub_rows = []
+    A_ub = lil_matrix((n, N))
+    b_ub = np.zeros(n)
 
-    # 3) m_i - sum_{j!=i} m-_ij >= 0
-    #    → -m_i + sum_{j!=i} m-_ij <= 0
     for i in range(n):
-        row = np.zeros(N)
-        row[idx_m.start + i] = -1.0
+        A_ub[i, idx_m.start + i] = -1.0
         for p_idx, (a, b_) in enumerate(pairs):
             if a == i or b_ == i:
-                row[idx_mm.start + p_idx] = 1.0
-        A_ub_rows.append(row)
-        b_ub_rows.append(0.0)
+                A_ub[i, idx_mm.start + p_idx] = 1.0
+        # b_ub[i] stays 0.0
 
-    A_ub = np.array(A_ub_rows)
-    b_ub = np.array(b_ub_rows)
+    A_ub = A_ub.tocsr()
 
     # --------------------------------------------------
-    # bounds:
-    # t+, t- >= 0
-    # 0 <= m_i <= 1
-    # m+_ij, m-_ij >= 0  (mij = m+ - m- in [-1,1] implicitly)
+    # bounds (unchanged -- this is a list, not a matrix)
     # --------------------------------------------------
     bounds = (
-        [(0, None)] * K  +   # t+
-        [(0, None)] * K  +   # t-
-        [(0, 1)]    * n  +   # m_i in [0,1]
-        [(0, None)] * P  +   # m+_ij
-        [(0, None)] * P      # m-_ij
+        [(0, None)] * K  +
+        [(0, None)] * K  +
+        [(0, 1)]    * n  +
+        [(0, None)] * P  +
+        [(0, None)] * P
     )
 
     res = linprog(c_obj, A_ub=A_ub, b_ub=b_ub,
@@ -159,11 +150,8 @@ def solve_lp(Xy, p, enforceone=True):
                   method='highs')
 
     if res.success:
-        # reconstruct m array: singletons then pairs
         m_singletons = res.x[idx_m]
-        m_pairs      = res.x[idx_mp] - res.x[idx_mm]  # mij = m+ - m-
-
-        # combined m vector: [m_1..m_n, m_12, m_13, ...]
+        m_pairs = res.x[idx_mp] - res.x[idx_mm]
         m_all = np.concatenate([m_singletons, m_pairs])
 
         return {
@@ -171,32 +159,13 @@ def solve_lp(Xy, p, enforceone=True):
             'obj':          res.fun,
             't+':           res.x[idx_tp],
             't-':           res.x[idx_tm],
-            'm':            m_all,        # singletons then pairs
+            'm':            m_all,
             'm_singletons': m_singletons,
             'm_pairs':      dict(zip(pairs, m_pairs)),
             'pairs':        pairs
         }
     else:
         return {'success': False, 'message': res.message}
-
-
-    # reconstruct m array: singletons then pairs
-    # m_singletons = res.x[idx_m]
-    # m_pairs      = res.x[idx_mp] - res.x[idx_mm]  # mij = m+ - m-
-
-    # # combined m vector: [m_1..m_n, m_12, m_13, ...]
-    # m_all = np.concatenate([m_singletons, m_pairs])
-
-    # return {
-    #     'success':      True,
-    #     'obj':          res.fun,
-    #     't+':           res.x[idx_tp],
-    #     't-':           res.x[idx_tm],
-    #     'm':            m_all,        # singletons then pairs
-    #     'm_singletons': m_singletons,
-    #     'm_pairs':      dict(zip(pairs, m_pairs)),
-    #     'pairs':        pairs
-    # }
 
 
 def fit(Xy, p, enforceone=True):
