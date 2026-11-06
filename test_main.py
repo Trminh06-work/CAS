@@ -110,6 +110,23 @@ def hv_from_logs(name: str, problem: Problem) -> pd.DataFrame:
 
 
 
+# ==================================================== THE HPC GRID ===================================================
+
+def read_grid(path: Path = HERE / "script" / "results" / "summary.csv") -> pd.DataFrame:
+    "one row per task of the cluster sweep, as written by run_experiment.py --aggregate"
+    grid = pd.read_csv(path)
+    # the reference point is stored as text, one number per objective
+    grid["hv_ref"] = [np.fromstring(s, sep = " ") if isinstance(s, str) else s for s in grid.hv_ref]
+    return grid.set_index(["problem", "n_obj", "solver", "model"]).sort_index()
+
+
+grid = read_grid()
+pd.set_option("display.max_rows", None)
+pd.set_option("display.max_columns", None)
+print(f"{len(grid)} rows")
+print(grid, end = "\n\n")
+
+
 if SWEEP:
     rows, boxes = [], {}
     for (name, make), solver in itertools.product(problems.items(), solvers):
@@ -148,11 +165,11 @@ if SWEEP:
 
 
 # one fixed reference point per problem, taken from its true front
-common = (pd.concat([hv_from_logs(name, make()) for name, make in problems.items()])
-            .set_index(["problem", "solver", "model"]).sort_index())
-print(common)
-common.to_csv(HERE / "hv_common_nadir.csv")
-print("written to", HERE / "hv_common_nadir.csv")
+# common = (pd.concat([hv_from_logs(name, make()) for name, make in problems.items()])
+#             .set_index(["problem", "solver", "model"]).sort_index())
+# print(common)
+# common.to_csv(HERE / "hv_common_nadir.csv")
+# print("written to", HERE / "hv_common_nadir.csv")
 
 
 # df = pd.read_csv("results_by_solver.csv").set_index(["problem", "solver"])
@@ -160,7 +177,7 @@ print("written to", HERE / "hv_common_nadir.csv")
 # pd.set_option("display.max_columns", None)
 # print(df)
 
-df = pd.read_csv("hv_common_nadir.csv").set_index(["problem", "solver"])
-pd.set_option("display.max_rows", None)
-pd.set_option("display.max_columns", None)
-print(df)
+# df = pd.read_csv("hv_common_nadir.csv").set_index(["problem", "solver"])
+# pd.set_option("display.max_rows", None)
+# pd.set_option("display.max_columns", None)
+# print(df)
