@@ -14,8 +14,8 @@
         hv_own      : the HV of that run alone, same reference point (after running a task, i.e. --index #)
         hypervolume : comparable HV using one reference nadir point  (after running --aggregate)
         hv_ref      : the reference nadir point for `hypervolume`    (after running --aggregate)
-        hv_rank     : ranking of models according to `hypervolume`   (after running --aggregate)
-        hv_models   : number of models involved in HV calculation    (after running --aggregate)
+        hv_rank     : ranking of the runs according to `hypervolume` (after running --aggregate)
+        hv_models   : number of runs sharing the reference point     (after running --aggregate)
 """
 import argparse, inspect, io, contextlib, glob, os, re, sys, traceback
 
@@ -162,7 +162,7 @@ def tasks(conf):
 
 
 def stem(task):
-    # the solver goes last, so aggregate() can still match a key to its group by dropping the model
+    # the model goes first and the solver last, so aggregate() matches a key to its group by dropping both
     return "{}_{}_d{}_m{}_s{}_{}".format(*task)
 
 
@@ -242,16 +242,16 @@ def run(task, conf, results_dir, logs_dir = None, trace_rows = 50, live = False)
 
 def aggregate(results_dir):
     """
-        A task is: ("problem", "n_dim", "n_obj", "seed", "solver") -> comparable among models
+        A group is: ("problem", "n_dim", "n_obj", "seed") -> comparable among models and solvers
 
         Merge the per-task rows and compute per-task hypervolume, against the reference point
         run() saved with the archive: the problem's own front widened by 10%, or - for a problem
         with no analytical front - the worst value per objective over the non-dominated points,
-        pooled over the models of one (problem, n_dim, n_obj, seed, solver).
+        pooled over every model and solver of one (problem, n_dim, n_obj, seed).
 
-        One seed is one experiment: its models share a reference point.
-        Compare models within a seed and aggregate across seeds by rank, i.e. hv_rank,
-        rather than by averaging across the seeds.
+        One seed is one experiment: its runs share a reference point, so hv_rank ranks every
+        model x solver run of it against the others. Aggregate across seeds by that rank
+        rather than by averaging the hypervolumes, which are on a per-seed scale.
     """
     from pymoo.indicators.hv import HV
 
@@ -272,13 +272,13 @@ def aggregate(results_dir):
     archives = {key: PF for key, (PF, _) in saved.items()}
 
     table["hypervolume"] = np.nan
-    # group_key does not include the models
-    # group_key: ("problem", "n_dim", "n_obj", "seed", "solver")
-    for group_key, group in table.groupby(["problem", "n_dim", "n_obj", "seed", "solver"]):
-        keys = [k for k in archives if k[1:] == group_key]
+    # group_key does not include the model or the solver
+    # group_key: ("problem", "n_dim", "n_obj", "seed")
+    for group_key, group in table.groupby(["problem", "n_dim", "n_obj", "seed"]):
+        keys = [k for k in archives if k[1:-1] == group_key]
         if not keys:
             continue
-        # every model of a group shares one problem, so they all saved the same reference
+        # every run of a group shares one problem, so they all saved the same reference
         ref = next((saved[k][1] for k in keys if saved[k][1] is not None),
                    np.vstack([archives[k] for k in keys]).max(0))
         hv = HV(ref_point = ref)
@@ -286,10 +286,10 @@ def aggregate(results_dir):
         table.loc[group.index, "hv_models"] = len(keys)
         table.loc[group.index, "hypervolume"] = [
             float(hv(archives[k])) if k in archives else np.nan
-            for k in ((m, *group_key) for m in group.model)]
+            for k in ((m, *group_key, s) for m, s in zip(group.model, group.solver))]
 
-    table["hv_rank"] = table.groupby(["problem", "n_dim", "n_obj", "seed", "solver"])["hypervolume"] \
-                            .rank(ascending = False, method = "min")      # 1 = largest, within a seed
+    table["hv_rank"] = table.groupby(["problem", "n_dim", "n_obj", "seed"])["hypervolume"] \
+                            .rank(ascending = False, method = "min")      # 1 = largest, over every run of the group
 
     out = os.path.join(results_dir, "summary.csv")
     table.to_csv(out, index = False)
