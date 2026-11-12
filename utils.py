@@ -102,7 +102,8 @@ def trace_learn(model: BaseModel, it: int, max_rows: int = None) -> str:
     names = [f"f{i + 1}" for i in range(model.PF_dim)]
     # live, solve() may not have snapshotted this iteration yet - the model itself is that state
     state = model.state_hist.get(int(it)) or model._state()
-    out = [f"\n=== iteration {int(it)}"]
+    t = model.time_hist.get(int(it), {})
+    out = [f"\n=== iteration {int(it)}" + (f"  (learn_weight {t['learn']:.2f}s)" if "learn" in t else "")]
 
     keep = model.pf_hist.get(int(it) - 1)       # the archive learn_weight() was handed here
     if keep is not None:
@@ -137,7 +138,9 @@ def trace_evals(model: BaseModel, it: int, max_rows: int = None) -> str:
     table["scalarised"] = scal[rows][:max_rows]
     table.insert(0, "x", [np.array2string(x, precision = 4, separator = ",",
                                           max_line_width = np.inf) for x in dec[rows][:max_rows]])
-    return f"  {int(rows.sum())} evaluations\n" + table.to_string(index = False) + "\n"
+    t = model.time_hist.get(int(it), {})
+    times = "".join(f", {k} {t[k]:.2f}s" for k in ("search", "filter") if k in t)
+    return f"  {int(rows.sum())} evaluations{times}\n" + table.to_string(index = False) + "\n"
 
 
 def trace_header(model: BaseModel) -> str:

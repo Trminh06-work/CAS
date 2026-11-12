@@ -50,6 +50,7 @@ class BaseModel(ABC):
         self.pf_hist: dict = {}                 # iteration -> mask of obj_hist that filter_PF_PS() kept
         self.iteration: int = 0                 # current outer iteration
         self.wallclock_time: float = np.nan     # seconds in solve(); stays nan unless it finished
+        self.time_hist: dict = {}               # iteration -> seconds in "learn", "search", "filter"
 
         # Termination criteria
         self.max_iter: int = max_iter           # outer iterations threshold
@@ -167,19 +168,29 @@ class BaseModel(ABC):
         """
             Fold the evaluations made from every evaluation made so far.
         """
+        t0 = time.perf_counter()
         # Follow the Pareto optimality definition
         keep = self.non_dominated(self.obj_hist)
         self.pf_hist[self.iteration] = keep     # what learn_weight() is handed at the next iteration
         self.PF, self.PS = self.obj_hist[keep], self.dec_hist[keep]
         self._worst = np.max(self.PF, axis = 0)
+        self._tick("filter", t0)
+
+
+    def _tick(self, step, t0):
+        t = self.time_hist.setdefault(self.iteration, {})
+        t[step] = t.get(step, 0.0) + time.perf_counter() - t0     # adds up the multi-starts of an iteration
 
 
     def _search(self, call):
+        t0 = time.perf_counter()
         try:
             call()
         except Exception:
             if self.num_func_eval < self.max_eval:
                 raise
+        finally:
+            self._tick("search", t0)
 
 
     def solve(self, callback = None):
@@ -224,7 +235,9 @@ class BaseModel(ABC):
             # X is the objective space -> self.PF
             # y is the vector of ones y = [1, 1, ..., 1] whose size is len(self.PF)
             self.y = np.ones(len(self.PF))
+            t0 = time.perf_counter()        # not `start` - that one times the whole of solve()
             self.w = self.learn_weight()
+            self._tick("learn", t0)
             if callback is not None:
                 callback(self, "learn")
             self.state_hist[it] = self._state()
