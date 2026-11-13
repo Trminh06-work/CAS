@@ -373,6 +373,7 @@ class ChoquetReg:
         bounds = [(0, 1000)] * self.dim
         result = minimize(objective, self.w_vec.copy(), method='Nelder-Mead', bounds = bounds,
                    options={'maxiter': 100, 'xatol': 1e-3})
+        self.nm_result = result     # nit, nfev (one LP each), status - read by the live trace
         self.w_vec = np.asarray(result.x, dtype=np.float64)
         return self.w_vec
 

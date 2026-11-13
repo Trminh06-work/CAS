@@ -356,6 +356,7 @@ class ChoquetModel(BaseModel):
 
     def learn_weight(self):
         # Learn the new Choquet capacities
+        self.choquet_reg.nm_result = None       # so the nnls branch below does not show the last fit's counts
         if self.PF.shape[0] <= 5:
             w, _ = nnls(self._utility(self.PF), self.y)    # this solver gives solution s.t. w >= 0
             n = np.linalg.norm(w)

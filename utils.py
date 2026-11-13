@@ -103,7 +103,11 @@ def trace_learn(model: BaseModel, it: int, max_rows: int = None) -> str:
     # live, solve() may not have snapshotted this iteration yet - the model itself is that state
     state = model.state_hist.get(int(it)) or model._state()
     t = model.time_hist.get(int(it), {})
-    out = [f"\n=== iteration {int(it)}" + (f"  (learn_weight {t['learn']:.2f}s)" if "learn" in t else "")]
+    nm = getattr(getattr(model, "choquet_reg", None), "nm_result", None)    # CAS only: its Nelder-Mead over w_vec
+    info = [f"learn_weight {t['learn']:.2f}s"] if "learn" in t else []
+    if nm is not None:      # one LP per objective call, plus the fit before the Nelder-Mead starts
+        info.append(f"{nm.nit} it / {nm.nfev + 1} LPs" + (", hit maxiter" if nm.status == 2 else ""))
+    out = [f"\n=== iteration {int(it)}" + (f"  ({', '.join(info)})" if info else "")]
 
     keep = model.pf_hist.get(int(it) - 1)       # the archive learn_weight() was handed here
     if keep is not None:
