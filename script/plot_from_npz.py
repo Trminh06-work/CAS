@@ -41,7 +41,9 @@ def replay_states(model):
         Q = obj[steps <= it - 1]
         model.PF = Q[model.non_dominated(Q)]
         model._worst = model.PF.max(0)
-        model.y = np.ones(len(model.PF))
+        model.PF_fit = model.PF[model.subsample_PF(model.PF, model.subsample,
+                                                  **model.subsample_kwargs)]
+        model.y = np.ones(len(model.PF_fit))
         w = model.learn_weight()
         model.state_hist[it] = model._state()
         if np.any(steps == it):

@@ -3,6 +3,7 @@ from contextlib import contextmanager
 import numpy as np
 from scipy.optimize import minimize, nnls
 from scipy.optimize import direct
+from scipy.spatial import cKDTree
 from tests import Problem
 
 import pyfmtools as fm
@@ -19,7 +20,8 @@ class _BudgetSpent(Exception):
 class BaseModel(ABC):
     def __init__(self,
         problem: Problem = None, random_state: int = 42, w0: np.ndarray = None,
-        max_iter: int = 50, max_eval: int = 100_000, tol: float = 1e-3, solver: str = "L-BFGS-B"
+        max_iter: int = 50, max_eval: int = 100_000, tol: float = 1e-3, solver: str = "L-BFGS-B",
+        subsample: str = None, subsample_kwargs: dict = None
     ):
         if problem is None:
             raise ValueError("Problem is not specified")
@@ -35,6 +37,9 @@ class BaseModel(ABC):
         self.y: np.ndarray  = np.empty(0)       # will be set to vector of ones  - (n_eval,)
         self.PF: np.ndarray = None              # Pareto front - objective space - (n_eval, PF_dim)
         self.PS: np.ndarray = None              # Pareto set   - decision space  - (n_eval, PS_dim)
+        self.subsample: str = subsample         # None -> learn_weight() is fitted on the whole PF
+        self.subsample_kwargs: dict = dict(subsample_kwargs or {})
+        self.PF_fit: np.ndarray = None          # the subset of PF learn_weight() is fitted on - (K', PF_dim)
         self.w: np.ndarray = np.ones(self.PF_dim) / self.PF_dim if w0 is None else np.asarray(w0, dtype = float)       # weight vector for scalarisation
 
         self._worst: np.ndarray = None          # worst point of the current archive - the utility offset
@@ -48,6 +53,7 @@ class BaseModel(ABC):
         self.iter_hist: np.ndarray = np.empty(0, dtype = int)   # iteration index of each evaluation
         self.scal_hist: list = []               # scalarised value at each evaluation, as the solver saw it
         self.pf_hist: dict = {}                 # iteration -> mask of obj_hist that filter_PF_PS() kept
+        self.sub_hist: dict = {}                # iteration -> rows handed to learn_weight()
         self.iteration: int = 0                 # current outer iteration
         self.wallclock_time: float = np.nan     # seconds in solve(); stays nan unless it finished
         self.time_hist: dict = {}               # iteration -> seconds in "learn", "search", "filter"
@@ -164,9 +170,38 @@ class BaseModel(ABC):
         return keep
 
 
-    def filter_PF_PS(self):
+    @staticmethod
+    def subsample_PF(PF, how: str = None, radius: float = 1e-3):
         """
-            Fold the evaluations made from every evaluation made so far.
+            Indices of the subset of PF that learn_weight() is fitted on.
+
+            how:
+                None      the whole front
+                "radius"  no two kept points within `radius` of each other (Euclidean, objective
+                          space): walk the rows in order, keep one, drop everything inside its ball
+        """
+        match how:
+            case None:
+                return np.arange(len(PF))
+            case "radius":
+                if radius <= 0:
+                    raise ValueError("radius must be positive")
+                if len(PF) < 2:
+                    return np.arange(len(PF))
+                tree, alive, keep = cKDTree(PF), np.ones(len(PF), bool), []
+                for i in range(len(PF)):
+                    if alive[i]:                # query_ball_point returns i itself, so this both
+                        keep.append(i)          # records i and retires it
+                        alive[tree.query_ball_point(PF[i], radius)] = False
+                return np.array(keep, dtype = int)
+            case _:
+                raise ValueError("Unknown subsampling option")
+
+
+    def filter_PF_PS(self, how: str = None, **kwargs):
+        """
+            Fold the evaluations made so far into the current front, then pick the subset of it
+            that learn_weight() is fitted on - the whole front when `how` is None.
         """
         t0 = time.perf_counter()
         # Follow the Pareto optimality definition
@@ -175,6 +210,12 @@ class BaseModel(ABC):
         self.PF, self.PS = self.obj_hist[keep], self.dec_hist[keep]
         self._worst = np.max(self.PF, axis = 0)
         self._tick("filter", t0)
+
+        t0 = time.perf_counter()
+        self.PF_fit = self.PF[self.subsample_PF(self.PF, how, **kwargs)]
+        self.sub_hist[self.iteration] = len(self.PF_fit)
+        if how is not None:                     # an unsubsampled run traces exactly as it used to
+            self._tick("subsample", t0)
 
 
     def _tick(self, step, t0):
@@ -223,7 +264,7 @@ class BaseModel(ABC):
         #             bounds = bounds, maxiter = self.max_iter * 10)
 
         # Filter out the non-dominated points obtained -> current PF and PS approximation
-        self.filter_PF_PS()
+        self.filter_PF_PS(self.subsample, **self.subsample_kwargs)
         if callback is not None:
             callback(self, "eval")
 
@@ -234,7 +275,7 @@ class BaseModel(ABC):
             # Step 1: Learn weight
             # X is the objective space -> self.PF
             # y is the vector of ones y = [1, 1, ..., 1] whose size is len(self.PF)
-            self.y = np.ones(len(self.PF))
+            self.y = np.ones(len(self.PF_fit))
             t0 = time.perf_counter()        # not `start` - that one times the whole of solve()
             self.w = self.learn_weight()
             self._tick("learn", t0)
@@ -258,7 +299,7 @@ class BaseModel(ABC):
                         break
 
             # Filter out the non-dominated points obtained -> current PF and PS approximation
-            self.filter_PF_PS()
+            self.filter_PF_PS(self.subsample, **self.subsample_kwargs)
             if callback is not None:
                 callback(self, "eval")
             if self.num_func_eval >= self.max_eval: # stop when the # func. eval. budget is reached
@@ -292,7 +333,7 @@ class LinearModel(BaseModel):
 
     def learn_weight(self):
         # Adaptively learn the weights from the current Pareto front, on the utilities the scalarisation
-        w, _ = nnls(self._utility(self.PF), self.y)    # this solver gives solution s.t. w >= 0
+        w, _ = nnls(self._utility(self.PF_fit), self.y)    # this solver gives solution s.t. w >= 0
 
         # argmin of w.F is scale–invariant for w >= 0
         # as the F -> the pf (near the origin 0), the ||w|| diverges
@@ -324,6 +365,8 @@ class ChoquetModel(BaseModel):
         self.choquet_reg.idx_i, self.choquet_reg.idx_j = self.choquet_reg.make_pair_indices(self.choquet_reg.dim)
         self.method = method
         self.choquet_reg.b_int = 0.0
+        self.subsample = "radius"
+        self.subsample_kwargs = dict(radius = 1e-3)
         # n = self.problem.n_obj
         # self.choquet_reg.v = np.array([bin(i).count('1') / n for i in range(2 ** n)], dtype = 'float64')    # This raises error for some configurations of DTLZ2
 
@@ -357,13 +400,13 @@ class ChoquetModel(BaseModel):
     def learn_weight(self):
         # Learn the new Choquet capacities
         self.choquet_reg.nm_result = None       # so the nnls branch below does not show the last fit's counts
-        if self.PF.shape[0] <= 5:
-            w, _ = nnls(self._utility(self.PF), self.y)    # this solver gives solution s.t. w >= 0
+        if self.PF_fit.shape[0] <= 5:
+            w, _ = nnls(self._utility(self.PF_fit), self.y)    # this solver gives solution s.t. w >= 0
             n = np.linalg.norm(w)
             return w / n if n > 0 else np.ones(self.PF_dim) / self.PF_dim
 
         w = self.choquet_reg.fit_choquet(
-            self._utility(self.PF) , self.y,
+            self._utility(self.PF_fit) , self.y,
             use_intercept = False, kadd = 2, method = self.method, enforceone = False
         )
         return w
@@ -422,8 +465,8 @@ class LipschitzModel(BaseModel):
         """
             Return the Lipchitz constant estimated from non-dominated PF and 1
         """
-        if self.PF.shape[0] <= 5:
-            w, _ = nnls(self._utility(self.PF), self.y)    # this solver gives solution s.t. w >= 0
+        if self.PF_fit.shape[0] <= 5:
+            w, _ = nnls(self._utility(self.PF_fit), self.y)    # this solver gives solution s.t. w >= 0
             n = np.linalg.norm(w)
             return w / n if n > 0 else np.ones(self.PF_dim) / self.PF_dim
 
@@ -434,7 +477,7 @@ class LipschitzModel(BaseModel):
 
         # We must add the nadir point and 0 to the training data for SLip
         # Otherwise the data is subject to a flat function -> yield nothing
-        X = np.concatenate([self._utility(self.PF), self._utility(worst_point())[None, :]])   # (K + 1, n_obj)
+        X = np.concatenate([self._utility(self.PF_fit), self._utility(worst_point())[None, :]])   # (K + 1, n_obj)
         y = np.concatenate([self.y, [0.0]])                     # (K + 1,)
         self.slip = SLipInterpolant(
             X, y, self.type, self.mon, self.num_k, self.a, self.b, self.knn_w

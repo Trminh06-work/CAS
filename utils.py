@@ -119,7 +119,9 @@ def trace_learn(model: BaseModel, it: int, max_rows: int = None) -> str:
                            columns = names + [f"u{i + 1}" for i in range(model.PF_dim)])
         fit.insert(0, "it", iters[:len(keep)][keep][rows])      # the block this row is repeated from
         fit["scalarised"] = scal[:len(keep)][keep][rows]        # exactly as that block printed it
-        out += [f"  learn_weight input: {len(pf_it)} non-dominated points",
+        n_fit = model.sub_hist.get(int(it) - 1)         # what it was fitted on, if subsampled
+        out += [f"  learn_weight input: {len(pf_it)} non-dominated points"
+                + (f", {n_fit} fitted after subsampling" if n_fit not in (None, len(pf_it)) else ""),
                 fit.to_string(index = False)]
 
     for key, value in state.items():
@@ -143,7 +145,7 @@ def trace_evals(model: BaseModel, it: int, max_rows: int = None) -> str:
     table.insert(0, "x", [np.array2string(x, precision = 4, separator = ",",
                                           max_line_width = np.inf) for x in dec[rows][:max_rows]])
     t = model.time_hist.get(int(it), {})
-    times = "".join(f", {k} {t[k]:.2f}s" for k in ("search", "filter") if k in t)
+    times = "".join(f", {k} {t[k]:.2f}s" for k in ("search", "filter", "subsample") if k in t)
     return f"  {int(rows.sum())} evaluations{times}\n" + table.to_string(index = False) + "\n"
 
 
