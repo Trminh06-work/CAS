@@ -9,7 +9,7 @@ GD(A,R)  = ( mean_a  min_r ||a-r||^p )^(1/p)   -- convergence
 IGD(A,R) = ( mean_r  min_a ||r-a||^p )^(1/p)   -- convergence+coverage
 
 Usage:
-    gd  = gd_gpu(A, R, p=2)
+    gd  = gd_gpu(A, R, p=1)
     igd = igd_gpu(A, R, p=1)
 """
 
@@ -37,14 +37,15 @@ def _min_dist_chunked(query, ref, chunk_size=2048, device=None):
     """
     if device is None:
         device = get_device()   #torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
-        
-        
-    query = torch.as_tensor(query, dtype=torch.float32, device=device)
-    ref = torch.as_tensor(ref, dtype=torch.float32, device=device)
+
+    if torch.device(device).type == "mps":
+        device = torch.device("cpu")        # MPS has no float64
+
+    query = torch.as_tensor(query, dtype=torch.float64, device=device)
+    ref = torch.as_tensor(ref, dtype=torch.float64, device=device)
 
     Q = query.shape[0]
-    out = torch.empty(Q, dtype=torch.float32, device=device)
+    out = torch.empty(Q, dtype=torch.float64, device=device)
 
     for start in range(0, Q, chunk_size):
         end = min(start + chunk_size, Q)
@@ -56,7 +57,7 @@ def _min_dist_chunked(query, ref, chunk_size=2048, device=None):
     return out
 
 
-def gd_gpu(A, R, p=2, chunk_size=2048, device=None):
+def gd_gpu(A, R, p=1, chunk_size=2048, device=None):
     """
     Generational Distance: GD(A,R) = (mean_a min_r ||a-r||^p)^(1/p)
     """

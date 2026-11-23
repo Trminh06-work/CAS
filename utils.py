@@ -69,12 +69,11 @@ def evaluate(models_arr: List[BaseModel]):
             Hypervolume - use pymoo
             Number of function evaluations
         """
-        from pymoo.indicators.hv import HV
+        from indicators import hypervolume
         nadir = find_nadir(in_space = "objective")
-        hv = HV(ref_point = nadir)
         rows = [
             dict(
-                hypervolume = hv(finite(m.PF)),
+                hypervolume = hypervolume(finite(m.PF), nadir),
                 n_func_eval = m.num_func_eval,
                 # n_non_dominated = len(finite(m.PF)), n_iter = int(m.iteration),
                 n_non_dominated = int(BaseModel.non_dominated(finite(m.obj_hist), "strongly").sum()),

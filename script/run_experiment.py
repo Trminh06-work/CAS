@@ -186,7 +186,7 @@ def ref_point(problem):
 
 
 def run(task, conf, results_dir, logs_dir = None, trace_rows = 50, live = False):
-    from pymoo.indicators.hv import HV
+    from indicators import hypervolume
 
     model_key, problem_name, n_dim, n_obj, seed, solver = task
     max_iter = int(conf["max_iter"][0])
@@ -235,7 +235,7 @@ def run(task, conf, results_dir, logs_dir = None, trace_rows = 50, live = False)
                             **({} if ref is None else dict(ref = ref)))
         if len(PF):
             # hv_own: this run alone, in the problem's own box when it has one, else its own
-            row["hv_own"] = float(HV(ref_point = PF.max(0) if ref is None else ref)(PF))
+            row["hv_own"] = hypervolume(PF, PF.max(0) if ref is None else ref)
 
     return row
 
@@ -253,7 +253,7 @@ def aggregate(results_dir):
         model x solver run of it against the others. Aggregate across seeds by that rank
         rather than by averaging the hypervolumes, which are on a per-seed scale.
     """
-    from pymoo.indicators.hv import HV
+    from indicators import hypervolume
 
     rows = [pd.read_csv(path) for path in sorted(glob.glob(os.path.join(results_dir, "*.csv")))
             if os.path.basename(path) != "summary.csv"]
@@ -281,11 +281,10 @@ def aggregate(results_dir):
         # every run of a group shares one problem, so they all saved the same reference
         ref = next((saved[k][1] for k in keys if saved[k][1] is not None),
                    np.vstack([archives[k] for k in keys]).max(0))
-        hv = HV(ref_point = ref)
         table.loc[group.index, "hv_ref"] = " ".join(f"{v:.6g}" for v in ref)
         table.loc[group.index, "hv_models"] = len(keys)
         table.loc[group.index, "hypervolume"] = [
-            float(hv(archives[k])) if k in archives else np.nan
+            hypervolume(archives[k], ref) if k in archives else np.nan
             for k in ((m, *group_key, s) for m, s in zip(group.model, group.solver))]
 
     table["hv_rank"] = table.groupby(["problem", "n_dim", "n_obj", "seed"])["hypervolume"] \
