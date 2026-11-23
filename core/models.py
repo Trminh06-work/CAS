@@ -171,29 +171,55 @@ class BaseModel(ABC):
 
 
     @staticmethod
-    def subsample_PF(PF, how: str = None, radius: float = 1e-3):
+    def _separated(PF, radius, tree = None, p = 2.0):
+        if radius <= 0:                         # nothing to separate, so keep the front as it is
+            return np.arange(len(PF))
+        tree = cKDTree(PF) if tree is None else tree
+        alive, keep = np.ones(len(PF), bool), []
+        for i in range(len(PF)):
+            if alive[i]:                        # query_ball_point returns i itself, so this both
+                keep.append(i)                  # records i and retires it
+                alive[tree.query_ball_point(PF[i], radius, p = p)] = False
+        return np.array(keep, dtype = int)
+
+
+    @staticmethod
+    def subsample_PF(PF, how: str = None, **kwargs):
         """
             Indices of the subset of PF that learn_weight() is fitted on.
 
             how:
-                None      the whole front
-                "radius"  no two kept points within `radius` of each other (Euclidean, objective
-                          space): walk the rows in order, keep one, drop everything inside its ball
+                None                  the whole front
+                "radius"              no two kept points within `radius` of each other
+                "nearest_neighbours"  same as "radius" but radius is extracted from the front itself:
+                                      the `quantile` of the nearest-neighbour distances
+
+            Both take `p`, the Minkowski exponent, 2 (Euclidean) by default.
         """
+        if len(PF) < 2:
+            return np.arange(len(PF))
         match how:
             case None:
                 return np.arange(len(PF))
             case "radius":
+                if "radius" not in kwargs:
+                    raise ValueError("radius method requires a radius")
+                radius = kwargs["radius"]
                 if radius <= 0:
                     raise ValueError("radius must be positive")
-                if len(PF) < 2:
-                    return np.arange(len(PF))
-                tree, alive, keep = cKDTree(PF), np.ones(len(PF), bool), []
-                for i in range(len(PF)):
-                    if alive[i]:                # query_ball_point returns i itself, so this both
-                        keep.append(i)          # records i and retires it
-                        alive[tree.query_ball_point(PF[i], radius)] = False
-                return np.array(keep, dtype = int)
+                return BaseModel._separated(PF, radius, p = kwargs.get("p", 2.0))
+            case "nearest_neighbours":
+                if "quantile" not in kwargs:
+                    raise ValueError("nearest_neighbours method requires a quantile")
+                quantile = kwargs["quantile"]
+                if not 0.0 <= quantile <= 1.0:
+                    raise ValueError("quantile must be between 0 and 1, inclusively")
+                p = kwargs.get("p", 2.0)
+                tree = cKDTree(PF)
+                # [0] -> distance array and [:, 0] is the point -> so starts from [:, 1]
+                # k = 1 -> retrieve itself, hence: k = 2 -> retrieve its nearest neighbour
+                nn = tree.query(PF, k = 2, p = p, workers = -1)[0][:, 1]
+                return BaseModel._separated(PF, float(np.quantile(nn, quantile)), tree, p)
             case _:
                 raise ValueError("Unknown subsampling option")
 
