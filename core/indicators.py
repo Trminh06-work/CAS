@@ -1,11 +1,3 @@
-"""
-    Quality indicators for the sweep: the single import site for all of them.
-
-    hypervolume() is implemented here; gd/igd/non_dominated are thin wrappers over gd_torch.py
-    and nd_torch.py, which keep their own implementations. Every heavy import is function-local,
-    so `import indicators` pulls neither torch nor pymoo - run_experiment.py reaches
-    hypervolume() on every cluster task and must not pay for them.
-"""
 import numpy as np
 
 
@@ -41,8 +33,7 @@ def hypervolume(F, ref):
         Exact hypervolume of F against ref, minimisation, via wfg. Returns a float; an empty F,
         or one with nothing inside the box, gives 0.0.
 
-        Falls back to pymoo (which is moocore) only when wfg is not installed, so a cluster
-        without the package still runs - slower at high m, but never wrong.
+        Falls back to pymoo (which is moocore) only when wfg is not installed.
     """
     F = np.asarray(F, dtype = float)
     if not len(F):
@@ -54,35 +45,32 @@ def hypervolume(F, ref):
         from pymoo.indicators.hv import HV
         return float(HV(ref_point = ref)(F))
 
-    # mandatory, not an optimisation: without this filter mainentryWFG counts points that lie
-    # beyond the reference, which inflated one sanity case 7.7x (1.0000 against a true 0.1300)
+    # without this filter mainentryWFG falsely computes HV
     inside = F[dominates_ref(F, ref)]
     return float(mainentryWFG(inside, ref)) if len(inside) else 0.0
 
 
 def gd(A, R, p = 1, chunk_size = 2048, device = None):
     """
-        Generational distance: how close A got to the reference front R. gd_torch.gd_gpu.
+        Generational distance: how close A got to the reference front R.
 
-        p = 1 is pymoo's convention. GD is sensitive to |R|, so fix the reference size and
-        record it; IGD is not.
+        GD is sensitive to |R|, so fix the reference size and record it; IGD is not.
     """
     from .gd_torch import gd_gpu
     return gd_gpu(A, R, p = p, chunk_size = chunk_size, device = device)
 
 
 def igd(A, R, p = 1, chunk_size = 2048, device = None):
-    "Inverted generational distance: how well A covers R. gd_torch.igd_gpu."
+    "Inverted generational distance: how well A covers R."
     from .gd_torch import igd_gpu
     return igd_gpu(A, R, p = p, chunk_size = chunk_size, device = device)
 
 
 def non_dominated(F, block_size = 1024, device = None):
     """
-        Block-wise non-dominated filter, minimisation. nd_torch.non_dominated_mask_gpu.
+        Block-wise non-dominated filter, minimisation.
 
-        Returns (mask, F_nd). float64, because float32 rounding makes near-ties compare equal,
-        which both drops non-dominated points and keeps dominated ones.
+        Returns (mask, F_nd). float64, because float32 rounding makes near-ties compare equal.
     """
     from .nd_torch import non_dominated_mask_gpu
     return non_dominated_mask_gpu(F, block_size = block_size, device = device)
