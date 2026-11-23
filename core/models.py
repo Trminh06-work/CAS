@@ -4,12 +4,12 @@ import numpy as np
 from scipy.optimize import minimize, nnls
 from scipy.optimize import direct
 from scipy.spatial import cKDTree
-from tests import Problem
+from .tests import Problem
 
 import pyfmtools as fm
-from choquetreg import ChoquetReg
-from slip_interpolant import SLipInterpolant
-from nd_torch import non_dominated_mask_gpu
+from .choquetreg import ChoquetReg
+from .slip_interpolant import SLipInterpolant
+from .nd_torch import non_dominated_mask_gpu
 import time
 
 
@@ -312,7 +312,7 @@ class BaseModel(ABC):
         """
             Plot one view of this run - see viz.visualise() for the arguments.
         """
-        from utils import visualise
+        from .utils import visualise
         return visualise(self, *args, **kwargs)
 
 

@@ -67,13 +67,13 @@ def gd(A, R, p = 1, chunk_size = 2048, device = None):
         p = 1 is pymoo's convention. GD is sensitive to |R|, so fix the reference size and
         record it; IGD is not.
     """
-    from gd_torch import gd_gpu
+    from .gd_torch import gd_gpu
     return gd_gpu(A, R, p = p, chunk_size = chunk_size, device = device)
 
 
 def igd(A, R, p = 1, chunk_size = 2048, device = None):
     "Inverted generational distance: how well A covers R. gd_torch.igd_gpu."
-    from gd_torch import igd_gpu
+    from .gd_torch import igd_gpu
     return igd_gpu(A, R, p = p, chunk_size = chunk_size, device = device)
 
 
@@ -84,5 +84,5 @@ def non_dominated(F, block_size = 1024, device = None):
         Returns (mask, F_nd). float64, because float32 rounding makes near-ties compare equal,
         which both drops non-dominated points and keeps dominated ones.
     """
-    from nd_torch import non_dominated_mask_gpu
+    from .nd_torch import non_dominated_mask_gpu
     return non_dominated_mask_gpu(F, block_size = block_size, device = device)

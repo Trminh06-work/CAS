@@ -1,5 +1,5 @@
 import numpy as np
-from liblipt import LibLipT
+from .liblipt import LibLipT
 import torch
 import pandas as pd
 

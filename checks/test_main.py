@@ -4,16 +4,17 @@ from pathlib import Path
 import numpy as np
 import itertools, pandas as pd
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))        # models, tests and utils live one level up, in src/
+HERE = Path(__file__).resolve().parent      # .../src/checks - this file's own workspace
+SRC = HERE.parent                           # .../src - the sweep's data
+sys.path.insert(0, str(SRC))
 
-from models import LinearModel, ChoquetModel, LipschitzModel, BaseModel
-from tests import ZDT1, ZDT2, ZDT3, DTLZ1, DTLZ2, Kursawe, Sch2, Fon
-from tests import Problem
+from core.models import LinearModel, ChoquetModel, LipschitzModel, BaseModel
+from core.tests import ZDT1, ZDT2, ZDT3, DTLZ1, DTLZ2, Kursawe, Sch2, Fon
+from core.tests import Problem
 
 import matplotlib.pyplot as plt
 from pymoo.indicators.hv import HV
-from utils import evaluate, visualise_weights, live_trace
+from core.utils import evaluate, visualise_weights, live_trace
 
 
 
@@ -112,7 +113,7 @@ def hv_from_logs(name: str, problem: Problem) -> pd.DataFrame:
 
 # ==================================================== THE HPC GRID ===================================================
 
-def read_grid(path: Path = HERE / "script" / "results" / "summary.csv") -> pd.DataFrame:
+def read_grid(path: Path = SRC / "script" / "results" / "summary.csv") -> pd.DataFrame:
     "one row per task of the cluster sweep, as written by run_experiment.py --aggregate"
     grid = pd.read_csv(path)
     # the reference point is stored as text, one number per objective

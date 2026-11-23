@@ -4,8 +4,12 @@ import plotly.graph_objects as go
 import seaborn as sns
 import numpy as np
 from typing import List
-from models import BaseModel
+from .models import BaseModel
 import pandas as pd
+
+# resolved at import time, not at call time: ablation/max/.../compare_dtlz1.py loads this module
+# with src/core on sys.path and then pops it, so a deferred import of a sibling module fails
+from .indicators import hypervolume as _hypervolume
 # from pymoo.
 
 
@@ -69,11 +73,10 @@ def evaluate(models_arr: List[BaseModel]):
             Hypervolume - use pymoo
             Number of function evaluations
         """
-        from indicators import hypervolume
         nadir = find_nadir(in_space = "objective")
         rows = [
             dict(
-                hypervolume = hypervolume(finite(m.PF), nadir),
+                hypervolume = _hypervolume(finite(m.PF), nadir),
                 n_func_eval = m.num_func_eval,
                 # n_non_dominated = len(finite(m.PF)), n_iter = int(m.iteration),
                 n_non_dominated = int(BaseModel.non_dominated(finite(m.obj_hist), "strongly").sum()),

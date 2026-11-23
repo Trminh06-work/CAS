@@ -13,7 +13,7 @@ script/results/
 .ipynb_checkpoints/
 choquet_playground/
 numerical_example/
-ablation_*/
+ablation/
 
 # macOS
 .DS_Store

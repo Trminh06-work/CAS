@@ -2,7 +2,7 @@ from typing import List
 import numpy as np
 from pymoo.problems import get_problem
 from pymoo.core.problem import ElementwiseProblem
-from agg import AggFunc
+from .agg import AggFunc
 
 
 
