@@ -5,6 +5,10 @@ __pycache__/
 .venv/
 venv/
 
+# Files
+script/logs/
+script/results/
+
 # Jupyter
 .ipynb_checkpoints/
 choquet_playground/
