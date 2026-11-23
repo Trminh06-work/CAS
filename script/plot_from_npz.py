@@ -14,9 +14,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 
 import numpy as np
-import models
+from core import models
 from run_experiment import MODELS, read_conf, build_problem
-from utils import visualise
+from core.utils import visualise
 
 
 def realign(model):

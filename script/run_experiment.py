@@ -20,11 +20,11 @@
 import argparse, inspect, io, contextlib, glob, os, re, sys, traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, ".."))        # the models live one level up
+sys.path.insert(0, os.path.join(HERE, ".."))   # the library lives in src/core
 
 import numpy as np
 import pandas as pd
-import models
+from core import models
 
 MODELS = {"baseline": "LinearModel", "cas": "ChoquetModel", "las": "LipschitzModel"}
 
@@ -77,14 +77,14 @@ def leaves(name, conf):
 
 def takes_n_obj(name, conf):
     "whether the grid chooses this problem's objectives - true of DTLZ, false of a combination"
-    import tests
+    from core import tests
     return (name not in combos(conf)
             and "n_obj" in inspect.signature(getattr(tests, name)).parameters)
 
 
 def build_problem(name, n_dim, n_obj, conf):
     "one problem instance: a combination, one the grid sizes in both spaces, or n_dim alone"
-    import tests
+    from core import tests
 
     parts = combos(conf).get(name)
     if parts is None:
@@ -97,7 +97,7 @@ def build_problem(name, n_dim, n_obj, conf):
 
 def build_part(part, n_dim, conf):
     "a part of a combination or an aggregation: an aggregation, or a problem that takes this n_dim"
-    import tests
+    from core import tests
 
     if part in aggs(conf):
         return build_agg(part, n_dim, conf)
@@ -112,7 +112,7 @@ def build_agg(name, n_dim, conf):
             p       r of QAM, the weighted power mean: g(t) = t^r, or log(t) if r = 0, 1 by default (p. 48)
             .dual   the t-conorm, N-dual of the t-norm with N(t) = 1 - t
     """
-    import agg
+    from core import agg
 
     spec, *parts = aggs(conf)[name]
     match = re.fullmatch(r"(\w+)(?:\((.+)\))?(\.dual)?", spec.replace(" ", ""))
@@ -139,7 +139,7 @@ def tasks(conf):
         - Problems with fixed n_dim: may take dec_dims in conf, but ignore during evaluations
         - Problems with fixed n_obj: ignore obj_dims in conf
     """
-    import tests                    # for the sizes the problem classes fix themselves
+    from core import tests          # for the sizes the problem classes fix themselves
 
     dec_dims, obj_dims = ([int(v) for v in conf[k]] for k in ("dec_dims", "obj_dims"))
     seeds, solvers = [int(v) for v in conf["seeds"]], conf["solvers"]
@@ -186,7 +186,7 @@ def ref_point(problem):
 
 
 def run(task, conf, results_dir, logs_dir = None, trace_rows = 50, live = False):
-    from indicators import hypervolume
+    from core.indicators import hypervolume
 
     model_key, problem_name, n_dim, n_obj, seed, solver = task
     max_iter = int(conf["max_iter"][0])
@@ -209,7 +209,7 @@ def run(task, conf, results_dir, logs_dir = None, trace_rows = 50, live = False)
         logs_dir, "trace_" + stem(task) + ".log")
     callback = None
     if trace_path is not None:
-        from utils import live_trace
+        from core.utils import live_trace
         callback = live_trace(trace_path, trace_rows or None)
 
     try:
@@ -253,7 +253,7 @@ def aggregate(results_dir):
         model x solver run of it against the others. Aggregate across seeds by that rank
         rather than by averaging the hypervolumes, which are on a per-seed scale.
     """
-    from indicators import hypervolume
+    from core.indicators import hypervolume
 
     rows = [pd.read_csv(path) for path in sorted(glob.glob(os.path.join(results_dir, "*.csv")))
             if os.path.basename(path) != "summary.csv"]
