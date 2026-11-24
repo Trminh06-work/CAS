@@ -5,7 +5,6 @@
         python benchmark.py --build        run and cache the MOEA grid in parallel, score nothing
         python benchmark.py --summary      print the comparison from the csv
         python benchmark.py --refs-only    build the reference fronts and check the box
-        python benchmark.py --limit 20     smoke test on the first 20 runs
 
     SELF-CONTAINED BY DESIGN. The only thing this script reads from elsewhere is the sweep's own
     npz (--as-dir). Everything else it needs it makes and owns, under results/benchmark: the four
@@ -57,6 +56,27 @@
       torch. reference_front() duplicates the sampler in analysis/compute_gd_igd.py rather than
       importing it, because that script's published gd_igd.csv uses p = 2 and must stay free to
       keep doing so; the two caches are separate and verified equal, 36 of 36.
+
+      THE ORDERING IS THE RANK, AND NOTHING HERE IS AN EFFECT SIZE. Ranks are reported because
+      they survive a change of reference box - re-boxing the sweep moved a model's mean rank by
+      under 0.1 and flipped 1 of 36 cell winners, where it moves hv itself by orders of
+      magnitude - and because they are the only form in which a MOEA and one AS configuration
+      are the same kind of thing.
+
+      An hv RATIO between the two families is deliberately not reported. It looks like an effect
+      size and is not one: most of the box is volume both families dominate, so the contested
+      fraction is small and the typical cell reads as a 2-6% difference however far apart the
+      fronts are, and a tighter box on WFG3 m5 moved that cell's apparent gap by 7x on its own.
+      For how large a difference is, quote igd_norm LEVELS, which have no box at all - not their
+      ratio, which blows up wherever the denominator nears zero (WFG2 m2 gives 102x off an
+      igd_norm of 0.0003). The cost of dropping the ratio is that rank cannot distinguish a
+      collapse from a near miss: AS's best rank is 5 of 7 on both WFG1 and WFG7 at every m,
+      though it loses 64% of the dominated volume on the first and 0.2% on the second. Say so
+      from the hv columns, which are still printed per cell.
+
+      Reporting MOEA/D alone would be cherry-picking: it is the weakest of the four baselines,
+      and SMS-EMOA ranks first in 25 of the 36 cells. --summary therefore always prints the
+      whole field, with the MOEA/D grid as the pair that isolates adaptive against fixed weights.
 """
 import argparse
 import csv
@@ -361,15 +381,13 @@ def score(job, as_dir, R, scale, ref):
     return row
 
 
-def main(as_dir, out, limit = None):
+def main(as_dir, out):
     from core import gd_torch
 
     todo = jobs(as_dir)
     have = done(out)
     n_as = sum(j["family"] == "as" for j in todo)
     todo = [j for j in todo if tuple(str(j[k]) for k in KEY) not in have]
-    if limit:
-        todo = todo[:limit]
 
     print(f"device {gd_torch.get_device()} | |R| {N_REF} seed {REF_SEED} | "
           f"GD p={P_GD}, IGD p={P_IGD} | box = {1 + PAD:.2f} x nadir")
@@ -403,6 +421,32 @@ def main(as_dir, out, limit = None):
     print(f"written to {os.path.relpath(out, HERE)}")
 
 
+def ranked(t, per_solver = True):
+    """
+        One row per configuration, ranked within each (problem, m) cell.
+
+        Each MOEA is reduced to its median over the 5 seeds FIRST, so it enters as one
+        configuration - the same unit as one AS (model, solver) pair - rather than as five draws
+        competing against AS's single one.
+
+        per_solver = True  : AS contributes all 7 solvers of each model, so 25 rows a cell.
+                             Per-method means are then diluted by each model's weak solvers.
+        per_solver = False : each AS model enters at its best solver, 7 rows a cell. This is the
+                             only form in which per-method mean ranks compare like with like.
+    """
+    import pandas as pd
+
+    cell = ["problem", "n_obj"]
+    AS = t[t.family == "as"][cell + ["method", "solver", "hv"]]
+    if not per_solver:
+        AS = AS.groupby(cell + ["method"], as_index = False).hv.max().assign(solver = "best")
+    MO = (t[t.family == "moea"].groupby(cell + ["method"], as_index = False).hv.median()
+                               .assign(solver = "median-of-5"))
+    out = pd.concat([AS, MO], ignore_index = True)
+    out["rank"] = out.groupby(cell).hv.rank(ascending = False, method = "average")
+    return out
+
+
 def summary(out):
     """
         The comparison, respecting the seed asymmetry: AS is one draw per (model, solver),
@@ -423,15 +467,47 @@ def summary(out):
                       med.max().rename("moea_best"),
                       med.idxmax().str[-1].rename("best_moea")], axis = 1)
     comp["winner"] = np.where(comp.as_best >= comp.moea_best, "as", "moea")
-    comp["ratio"] = comp.as_best / comp.moea_best
     print("hypervolume in the common box, per cell "
           "(as_best = best of 21 AS runs; moea_best = best MOEA's median of 5)")
     print(comp.round(3).to_string(), "\n")
-    print(f"AS wins {int((comp.winner == 'as').sum())} of {len(comp)} cells; "
-          f"median HV ratio {comp.ratio.median():.3f}\n")
+    print(f"AS wins {int((comp.winner == 'as').sum())} of {len(comp)} cells\n")
 
     print("by objective count (count of cells AS wins):")
     print(comp.groupby("n_obj").winner.value_counts().unstack(fill_value = 0).to_string(), "\n")
+
+    # the rank view. Robust to the reference box in a way the hv columns above are not, and the
+    # only framing in which a MOEA and one AS configuration are comparable units.
+    d = ranked(t)
+    n = int(d.groupby(cell).size().iloc[0])
+    print(f"RANK within each cell: {n} configurations (AS's 21, plus each MOEA's median-of-5); "
+          f"chance rank {(n + 1) / 2:.1f}")
+    print("  an AS model contributes 7 solver rows and a MOEA only 1, so these means are pulled")
+    print("  toward the middle by each model's weak solvers - compare on the next table instead")
+    r = d.groupby("method")["rank"].agg(["mean", "median"]).round(2).sort_values("mean")
+    r["ranks_1st"] = (d[d["rank"] == 1].method.value_counts()
+                       .reindex(r.index, fill_value = 0).astype(int))
+    print(r.to_string(), "\n")
+
+    fair = ranked(t, per_solver = False)
+    n = int(fair.groupby(cell).size().iloc[0])
+    print(f"the comparable form: each AS model at its best solver, each MOEA at its median - "
+          f"{n} rows a cell, chance rank {(n + 1) / 2:.1f}")
+    tab = fair.pivot_table(index = "method", columns = "n_obj", values = "rank", aggfunc = "mean")
+    tab["all m"] = fair.groupby("method")["rank"].mean()
+    print(tab.round(2).sort_values("all m").to_string(), "\n")
+
+    # the pair that isolates what adaptive weights buy: AS's 21 configurations and MOEA/D alone
+    pair_rank = ranked(t[t.family.eq("as") | t.method.eq("moead")])
+    n = int(pair_rank.groupby(cell).size().iloc[0])
+    md = pair_rank[pair_rank.method == "moead"]
+    print(f"MOEA/D's rank among AS's 21 configurations and itself ({n} a cell), per problem and m")
+    print(md.pivot(index = "problem", columns = "n_obj", values = "rank")
+            .to_string(float_format = lambda v: f"{v:.0f}"))
+    first = int((md["rank"] == 1).sum())
+    print(f"  MOEA/D beats all 21 AS configurations in {first} of {len(md)} cells; "
+          f"AS takes the other {len(md) - first}")
+    print(f"  mean MOEA/D rank by m: "
+          f"{md.groupby('n_obj')['rank'].mean().round(2).to_dict()}\n")
 
     # the load-bearing pair: MOEA/D is fixed-weight decomposition, cas is the adaptive one
     pair = t.method.isin(["cas", "moead"])
@@ -462,7 +538,6 @@ if __name__ == "__main__":
                                      formatter_class = argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--as-dir", default = AS_DIR, help = "the sweep's per-task npz")
     parser.add_argument("--out", default = OUT)
-    parser.add_argument("--limit", type = int, help = "score only this many runs, for a smoke test")
     parser.add_argument("--build", action = "store_true", help = "run and cache the MOEA grid")
     parser.add_argument("--workers", type = int, default = WORKERS, help = "--build only")
     parser.add_argument("--summary", action = "store_true", help = "print the comparison and exit")
@@ -476,4 +551,4 @@ if __name__ == "__main__":
     elif args.summary:
         summary(args.out)
     else:
-        main(args.as_dir, args.out, args.limit)
+        main(args.as_dir, args.out)
