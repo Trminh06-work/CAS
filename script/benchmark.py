@@ -6,35 +6,11 @@
         python benchmark.py --summary      print the comparison from the csv
         python benchmark.py --refs-only    build the reference fronts and check the box
 
-    SELF-CONTAINED BY DESIGN. The only thing this script reads from elsewhere is the sweep's own
-    npz (--as-dir). Everything else it needs it makes and owns, under results/benchmark: the four
-    MOEA runs, the GD/IGD reference fronts, and the csv.
-
-    So it borrows nothing from ablation/moea, nor from results/analysis - two neighbours with
-    their own questions, settings and lifetimes. The MOEAs are configured exactly as
-    ablation/moea configures them and reproduce its npz bit for bit; the reference fronts are
-    built the same way analysis/compute_gd_igd.py builds its own and come out bit-identical.
-    Both are facts worth verifying and neither is a dependency worth having: a neighbour is free
-    to be deleted, re-run with other settings, or published as it stands, and this comparison
-    must not change when it is.
-
-    Resumable twice over: a cached MOEA npz is never re-run, and a scored row is never
-    re-scored, so an interrupted pass loses nothing. Delete the csv to rescore from scratch.
-
     WHAT MAKES THE TWO COMPARABLE
 
       budget      both families spend max_eval = 100_000 objective evaluations.
-      archive     both store PF = the non-dominated set of EVERY point evaluated, not the final
-                  population. A MOEA's pop_F is ~100-200 points and would flatter its convergence
-                  while destroying its spread, so it is deliberately not used here. The filter is
-                  core.nd_torch, the function BaseModel.non_dominated("strongly") already uses,
-                  so the two families' fronts come out of one implementation and not merely out
-                  of one definition.
-      box         one hypervolume reference for everyone: 1.1 * (2, 4, ..., 2m). WFG is built with
-                  f_i in [0, 2i] and its front's nadir at exactly 2i, so this is analytic - no
-                  sampling, identical for all nine problems, and independent of what either
-                  family happened to reach. The alternative (pooling the runs' own maxima) is
-                  endogenous: it would move when the MOEAs spread wider than AS did.
+      archive     both store PF = the non-dominated set of EVERY point evaluated, not the final population.
+      box         one hypervolume reference for everyone: 1.1 * (2, 4, ..., 2m).
       front       one reference front per (problem, m) for GD/IGD, drawn from WFG's analytic
                   Pareto SET with a fixed seed, and shared by both families.
       problem     the MOEAs search the UNIT CUBE and WFG's [0, 2i] is applied by to_domain inside
@@ -42,44 +18,13 @@
 
     WHAT IS NOT SYMMETRIC, AND MUST BE SAID IN ANY WRITE-UP
 
-      seeds       AS ran one seed; the MOEAs ran five. Do not rank the two families' runs against
-                  each other as if they were peers. Compare AS's single run against each MOEA's
-                  median-of-5, and state which side carries error bars. --summary does this.
-      solvers     an AS "run" is (model, solver); a MOEA run is (algorithm, seed). AS therefore
-                  has 7 configurations per model per cell and the MOEAs have 1.
+      seeds       AS ran one seed; the MOEAs ran five (median-of-5). --summary does this.
+      solvers     an AS "run" is (model, solver); a MOEA run is (algorithm, seed).
 
     CONVENTIONS
 
-      GD uses p = 1, which is pymoo's (the mean over the minima). The older
-      analysis/gd_igd.csv used p = 2 and reads about 14% high; both exponents are recorded in
-      the csv so the two are never silently mixed. GD is sensitive to |R| and IGD is not, so
-      n_ref is recorded per row and must be held fixed across anything being compared.
-
-      Nothing above numpy is imported at module level, so --summary needs neither pymoo nor
-      torch. reference_front() duplicates the sampler in analysis/compute_gd_igd.py rather than
-      importing it, because that script's published gd_igd.csv uses p = 2 and must stay free to
-      keep doing so; the two caches are separate and verified equal, 36 of 36.
-
-      THE ORDERING IS THE RANK, AND NOTHING HERE IS AN EFFECT SIZE. Ranks are reported because
-      they survive a change of reference box - re-boxing the sweep moved a model's mean rank by
-      under 0.1 and flipped 1 of 36 cell winners, where it moves hv itself by orders of
-      magnitude - and because they are the only form in which a MOEA and one AS configuration
-      are the same kind of thing.
-
-      An hv RATIO between the two families is deliberately not reported. It looks like an effect
-      size and is not one: most of the box is volume both families dominate, so the contested
-      fraction is small and the typical cell reads as a 2-6% difference however far apart the
-      fronts are, and a tighter box on WFG3 m5 moved that cell's apparent gap by 7x on its own.
-      For how large a difference is, quote igd_norm LEVELS, which have no box at all - not their
-      ratio, which blows up wherever the denominator nears zero (WFG2 m2 gives 102x off an
-      igd_norm of 0.0003). The cost of dropping the ratio is that rank cannot distinguish a
-      collapse from a near miss: AS's best rank is 5 of 7 on both WFG1 and WFG7 at every m,
-      though it loses 64% of the dominated volume on the first and 0.2% on the second. Say so
-      from the hv columns, which are still printed per cell.
-
-      Reporting MOEA/D alone would be cherry-picking: it is the weakest of the four baselines,
-      and SMS-EMOA ranks first in 25 of the 36 cells. --summary therefore always prints the
-      whole field, with the MOEA/D grid as the pair that isolates adaptive against fixed weights.
+      GD and IGD use p = 1.
+      THE ORDERING IS THE RANK, NOT RAW HV.
 """
 import argparse
 import csv
@@ -165,15 +110,6 @@ def reference_front(problem, n_obj, n = N_REF, seed = REF_SEED):
 def recorded(problem):
     """
         The sweep's own problem, wrapped for pymoo: vectorised, and logging every evaluation.
-
-        Two things here are load-bearing. The search box is the UNIT CUBE and WFG's [0, 2i] is
-        applied by to_domain inside _evaluate, exactly as tests.WFG does it - handing pymoo
-        get_problem("wfg4", ...) directly would search a different space and the comparison
-        would be meaningless. And the logging is inside _evaluate rather than in a Callback,
-        because MOEA/D is steady-state: its algorithm.off is a single Individual, so a callback
-        over pop + off captures about 14% of the budget.
-
-        The class is local so that importing this module costs nothing but numpy.
     """
     from pymoo.core.problem import Problem
     from core.tests import to_domain
@@ -269,14 +205,7 @@ def _build_one(job):
 def build(workers = WORKERS, algorithms = ALGORITHMS):
     """
         Run and cache the MOEA grid in parallel, scoring nothing.
-
-        Separate from scoring because the search is the expensive half (SMS-EMOA at m=5 is about
-        20 minutes a run against seconds for NSGA-II) and embarrassingly parallel, while scoring
-        must stay in one process to append to one csv. Slowest first, so the m=5 SMS-EMOA runs
-        start immediately and the cheap algorithms fill in around them.
-
-        Scoring falls back to running a missing MOEA itself, so this mode is an optimisation and
-        never a prerequisite.
+        This mode is an optimisation to run MOEA in faster manner.
     """
     import multiprocessing as mp
     from concurrent.futures import ProcessPoolExecutor
@@ -466,8 +395,7 @@ def summary(out):
     print("by objective count (count of cells AS wins):")
     print(comp.groupby("n_obj").winner.value_counts().unstack(fill_value = 0).to_string(), "\n")
 
-    # the rank view. Robust to the reference box in a way the hv columns above are not, and the
-    # only framing in which a MOEA and one AS configuration are comparable units.
+    # the rank view. Robust to the reference box in a way the hv columns above are not
     d = ranked(t)
     n = int(d.groupby(cell).size().iloc[0])
     print(f"RANK within each cell: {n} configurations (AS's 21, plus each MOEA's median-of-5); "
