@@ -26,7 +26,10 @@
       budget      both families spend max_eval = 100_000 objective evaluations.
       archive     both store PF = the non-dominated set of EVERY point evaluated, not the final
                   population. A MOEA's pop_F is ~100-200 points and would flatter its convergence
-                  while destroying its spread, so it is deliberately not used here.
+                  while destroying its spread, so it is deliberately not used here. The filter is
+                  core.nd_torch, the function BaseModel.non_dominated("strongly") already uses,
+                  so the two families' fronts come out of one implementation and not merely out
+                  of one definition.
       box         one hypervolume reference for everyone: 1.1 * (2, 4, ..., 2m). WFG is built with
                   f_i in [0, 2i] and its front's nadir at exactly 2i, so this is analytic - no
                   sampling, identical for all nine problems, and independent of what either
@@ -106,6 +109,7 @@ P_GD = 1                # pymoo's convention: the mean over the minima
 P_IGD = 1
 PAD = 0.10              # the box is the nadir widened by this much
 CHUNK = 2048            # rows of the pairwise distance matrix held at once
+ND_BLOCK = 1024         # rows per block in the non-dominated filter, nd_torch's own default
 
 BUDGET = 100_000                            # job.conf's max_eval, so both families spend the same
 N_DIM = 10
@@ -142,8 +146,8 @@ def reference_front(problem, n_obj, n = N_REF, seed = REF_SEED):
         with np.load(file) as handle:
             return handle["R"]
 
-    import moocore
     import run_experiment
+    from core.nd_torch import non_dominated_mask_gpu
 
     inner = run_experiment.build_problem(problem, N_DIM, n_obj, run_experiment.read_conf(CONF)).inner
     # _calc_pareto_set does not forward random_state, so the sampler is called directly
@@ -151,7 +155,7 @@ def reference_front(problem, n_obj, n = N_REF, seed = REF_SEED):
     X = np.vstack([inner._calc_pareto_set_extremes(), inner._positional_to_optimal(K)])
     F = run_experiment.finite(np.asarray(inner.evaluate(X), dtype = float))
     uniq = np.unique(F, axis = 0)
-    R = uniq[moocore.is_nondominated(uniq)]
+    R = uniq[non_dominated_mask_gpu(uniq, block_size = ND_BLOCK)[0]]
 
     os.makedirs(REF_DIR, exist_ok = True)
     np.savez_compressed(file, R = R)
@@ -195,11 +199,6 @@ def recorded(problem):
 def algorithm_for(algo, n_obj):
     """
         One of the four baselines, at pymoo's own defaults but for what each one must be told.
-
-        MOEA/D is the load-bearing comparison: it IS fixed-weight decomposition scalarisation,
-        so against `cas` it isolates exactly what making the weights adaptive buys. The other
-        three are there so a win over MOEA/D cannot be mistaken for a win over the field -
-        SMS-EMOA in particular is hypervolume-driven and the strongest of them on HV.
     """
     from pymoo.algorithms.moo.moead import MOEAD
     from pymoo.algorithms.moo.nsga2 import NSGA2
@@ -228,19 +227,15 @@ def moea_file(algo, problem, n_obj, seed):
 def run_moea(algo, problem, n_obj, seed, budget = BUDGET):
     """
         Run one MOEA on this problem and return its archive front, caching it as npz.
-
-        The result is the non-dominated set of all `budget` evaluations, not the final
-        population - the same quantity the sweep reports. Saved under the sweep's key names so
-        plot_from_npz.py can read it, and so a second call is free.
     """
     file = moea_file(algo, problem, n_obj, seed)
     if os.path.exists(file):
         with np.load(file) as handle:
             return handle["PF"]
 
-    import moocore
     from pymoo.optimize import minimize
     import run_experiment
+    from core.nd_torch import non_dominated_mask_gpu
 
     inner = run_experiment.build_problem(problem, N_DIM, n_obj, run_experiment.read_conf(CONF))
     if inner.n_obj != n_obj:
@@ -252,14 +247,10 @@ def run_moea(algo, problem, n_obj, seed, budget = BUDGET):
     wall = time.perf_counter() - t0
 
     # a generational algorithm checks the budget after the generation, so it overshoots by up to
-    # pop_size - 1 (NSGA-III at m=5 by 170): cut to the budget so every run of either family is
-    # scored on exactly the same spend
+    # pop_size - 1: cut to the budget so every run of either family is scored on exactly the same spend
     F, X, gen = (np.concatenate(a)[:budget] for a in (rec.F, rec.X, rec.gen))
-    # the non-dominated set, one copy per distinct vector - BaseModel.non_dominated's "strongly"
-    # contract, the filter the sweep applied to its own archive, but through moocore, which
-    # handles a 100 000-row block in 0.3s where the block-wise torch version takes 267s
     uniq, first = np.unique(F, axis = 0, return_index = True)
-    idx = np.sort(first[moocore.is_nondominated(uniq)])
+    idx = np.sort(first[non_dominated_mask_gpu(uniq, block_size = ND_BLOCK)[0]])
 
     os.makedirs(os.path.dirname(file), exist_ok = True)
     np.savez_compressed(file, PF = F[idx], PS = X[idx], made = gen[idx].astype(np.int32),
