@@ -18,7 +18,7 @@
 
     WHAT IS NOT SYMMETRIC, AND MUST BE SAID IN ANY WRITE-UP
 
-      seeds       AS ran one seed; the MOEAs ran five (median-of-5). --summary does this.
+      seeds       AS ran one seed; each MOEA ran several and enters as the median over them.
       solvers     an AS "run" is (model, solver); a MOEA run is (algorithm, seed).
 
     CONVENTIONS
@@ -341,27 +341,19 @@ def main(as_dir, out):
     print(f"written to {os.path.relpath(out, HERE)}")
 
 
-def ranked(t, per_solver = True):
+def ranked(t):
     """
         One row per configuration, ranked within each (problem, m) cell.
-
-        Each MOEA is reduced to its median over the 5 seeds FIRST, so it enters as one
-        configuration - the same unit as one AS (model, solver) pair - rather than as five draws
-        competing against AS's single one.
-
-        per_solver = True  : AS contributes all 7 solvers of each model, so 25 rows a cell.
-                             Per-method means are then diluted by each model's weak solvers.
-        per_solver = False : each AS model enters at its best solver, 7 rows a cell. This is the
-                             only form in which per-method mean ranks compare like with like.
+        Each MOEA is its median over its seeds.
     """
     import pandas as pd
 
     cell = ["problem", "n_obj"]
-    AS = t[t.family == "as"][cell + ["method", "solver", "hv"]]
-    if not per_solver:
-        AS = AS.groupby(cell + ["method"], as_index = False).hv.max().assign(solver = "best")
-    MO = (t[t.family == "moea"].groupby(cell + ["method"], as_index = False).hv.median()
-                               .assign(solver = "median-of-5"))
+    label = f"median-of-{t[t.family == 'moea'].seed.nunique()}"
+    AS = (t[t.family == "as"][cell + ["family", "method", "solver", "hv"]]
+            .assign(config = lambda f: f.method + "/" + f.solver))
+    MO = (t[t.family == "moea"].groupby(cell + ["family", "method"], as_index = False).hv.median()
+                               .assign(solver = label, config = lambda f: f.method))
     out = pd.concat([AS, MO], ignore_index = True)
     out["rank"] = out.groupby(cell).hv.rank(ascending = False, method = "average")
     return out
@@ -370,7 +362,7 @@ def ranked(t, per_solver = True):
 def summary(out):
     """
         The comparison, respecting the seed asymmetry: AS is one draw per (model, solver),
-        each MOEA is five draws, so the MOEAs are reduced to a median before anything is compared.
+        each MOEA several, so the MOEAs are reduced to a median before anything is compared.
     """
     import pandas as pd
 
@@ -379,51 +371,36 @@ def summary(out):
     t = pd.read_csv(out)
     print(f"{len(t)} runs: {(t.family == 'as').sum()} as, {(t.family == 'moea').sum()} moea\n")
 
-    # per (problem, m): AS's best over its 21 configurations, each MOEA's median over 5 seeds
+    # the rank view, and the only view: Robust to the reference box in a way raw hv is not
     cell = ["problem", "n_obj"]
-    med = t[t.family == "moea"].groupby(cell + ["method"]).hv.median().groupby(cell)
-    comp = pd.concat([t[t.family == "as"].groupby(cell).hv.max().rename("as_best"),
-                      t[t.family == "as"].groupby(cell).hv.median().rename("as_median"),
-                      med.max().rename("moea_best"),
-                      med.idxmax().str[-1].rename("best_moea")], axis = 1)
-    comp["winner"] = np.where(comp.as_best >= comp.moea_best, "as", "moea")
-    print("hypervolume in the common box, per cell "
-          "(as_best = best of 21 AS runs; moea_best = best MOEA's median of 5)")
-    print(comp.round(3).to_string(), "\n")
-    print(f"AS wins {int((comp.winner == 'as').sum())} of {len(comp)} cells\n")
-
-    print("by objective count (count of cells AS wins):")
-    print(comp.groupby("n_obj").winner.value_counts().unstack(fill_value = 0).to_string(), "\n")
-
-    # the rank view. Robust to the reference box in a way the hv columns above are not
     d = ranked(t)
-    n = int(d.groupby(cell).size().iloc[0])
-    print(f"RANK within each cell: {n} configurations (AS's 21, plus each MOEA's median-of-5); "
-          f"chance rank {(n + 1) / 2:.1f}")
-    print("  an AS model contributes 7 solver rows and a MOEA only 1, so these means are pulled")
-    print("  toward the middle by each model's weak solvers - compare on the next table instead")
-    r = d.groupby("method")["rank"].agg(["mean", "median"]).round(2).sort_values("mean")
-    r["ranks_1st"] = (d[d["rank"] == 1].method.value_counts()
+    sizes = d.groupby(cell).size()
+    n, n_as = int(sizes.iloc[0]), int(d[d.family == "as"].groupby(cell).size().iloc[0])
+    print(f"RANK within each cell: {n} configurations - {n_as} AS (model, solver) pairs and "
+          f"{n - n_as} MOEA medians; chance rank {(n + 1) / 2:.1f}")
+    if sizes.nunique() > 1:
+        print(f"  WARNING cells hold {sizes.min()}-{sizes.max()} configurations, so the ranks "
+              f"are not on one scale and the chance rank is only indicative")
+    r = d.groupby("config")["rank"].agg(["mean", "median"]).round(2).sort_values("mean")
+    r["ranks_1st"] = (d[d["rank"] == 1].config.value_counts()
                        .reindex(r.index, fill_value = 0).astype(int))
     print(r.to_string(), "\n")
 
-    fair = ranked(t, per_solver = False)
-    n = int(fair.groupby(cell).size().iloc[0])
-    print(f"the comparable form: each AS model at its best solver, each MOEA at its median - "
-          f"{n} rows a cell, chance rank {(n + 1) / 2:.1f}")
-    tab = fair.pivot_table(index = "method", columns = "n_obj", values = "rank", aggfunc = "mean")
-    tab["all m"] = fair.groupby("method")["rank"].mean()
+    print(f"mean rank by objective count, the same {n} configurations:")
+    tab = d.pivot_table(index = "config", columns = "n_obj", values = "rank", aggfunc = "mean")
+    tab["all m"] = d.groupby("config")["rank"].mean()
     print(tab.round(2).sort_values("all m").to_string(), "\n")
 
-    # the pair that isolates what adaptive weights buy: AS's 21 configurations and MOEA/D alone
+    # the pair that isolates what adaptive weights buy: every AS configuration and MOEA/D alone
     pair_rank = ranked(t[t.family.eq("as") | t.method.eq("moead")])
     n = int(pair_rank.groupby(cell).size().iloc[0])
+    n_as = int(pair_rank[pair_rank.family == "as"].groupby(cell).size().iloc[0])
     md = pair_rank[pair_rank.method == "moead"]
-    print(f"MOEA/D's rank among AS's 21 configurations and itself ({n} a cell), per problem and m")
+    print(f"MOEA/D's rank among {n_as} AS configurations and itself ({n} a cell), per problem and m")
     print(md.pivot(index = "problem", columns = "n_obj", values = "rank")
             .to_string(float_format = lambda v: f"{v:.0f}"))
     first = int((md["rank"] == 1).sum())
-    print(f"  MOEA/D beats all 21 AS configurations in {first} of {len(md)} cells; "
+    print(f"  MOEA/D beats all {n_as} AS configurations in {first} of {len(md)} cells; "
           f"AS takes the other {len(md) - first}")
     print(f"  mean MOEA/D rank by m: "
           f"{md.groupby('n_obj')['rank'].mean().round(2).to_dict()}\n")
