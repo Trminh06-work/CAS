@@ -59,7 +59,8 @@ ND_BLOCK = 1024         # rows per block in the non-dominated filter, nd_torch's
 BUDGET = 100_000                            # job.conf's max_eval, so both families spend the same
 N_DIM = 10
 SEEDS = (0, 1, 2, 3, 4)
-ALGORITHMS = ("moead", "nsga2", "nsga3", "sms")
+# ALGORITHMS = ("moead", "nsga2", "nsga3", "sms")
+ALGORITHMS = ("moead",)
 PARTITIONS = {2: 99, 3: 12, 4: 7, 5: 6}     # das-dennis -> 100, 91, 120, 210 directions
 POP = 100                                   # NSGA-II and SMS-EMOA, which take a size not directions
 WORKERS = 4                                 # --build only; scoring stays in one process
@@ -67,6 +68,12 @@ WORKERS = 4                                 # --build only; scoring stays in one
 FIELDS = ["family", "method", "problem", "n_dim", "n_obj", "seed", "solver", "archive",
           "hv", "gd", "igd", "gd_norm", "igd_norm", "n_ref", "ref_seed", "p_gd", "p_igd"]
 KEY = ("family", "method", "problem", "n_obj", "seed", "solver")
+# the indicators the summary tabulates -> (rank ascending?, how to read it). hv must be present:
+# it is what the cell rank is taken on. ascending = False puts the largest value at rank 1.
+REPORTED = {"hv":       (False, "higher is better"),
+            "igd_norm": (True,  "lower is better"),
+            "gd_norm":  (True,  "lower is better"),
+            "archive":  (False, "front size, not a score")}
 PROBS = [f"WFG{i}" for i in range(1, 10)]
 OBJS = (2, 3, 4, 5)
 
@@ -341,18 +348,20 @@ def main(as_dir, out):
     print(f"written to {os.path.relpath(out, HERE)}")
 
 
-def ranked(t):
+def ranked(t, metrics = REPORTED):
     """
-        One row per configuration, ranked within each (problem, m) cell.
-        Each MOEA is its median over its seeds.
+        One row per configuration, ranked within each (problem, m) cell, carrying every reported
+        indicator. Each MOEA is its median over its seeds, so the seed asymmetry is handled here
+        and once only - everything downstream reads one row per (config, cell).
     """
     import pandas as pd
 
     cell = ["problem", "n_obj"]
     label = f"median-of-{t[t.family == 'moea'].seed.nunique()}"
-    AS = (t[t.family == "as"][cell + ["family", "method", "solver", "hv"]]
+    AS = (t[t.family == "as"][cell + ["family", "method", "solver"] + list(metrics)]
             .assign(config = lambda f: f.method + "/" + f.solver))
-    MO = (t[t.family == "moea"].groupby(cell + ["family", "method"], as_index = False).hv.median()
+    MO = (t[t.family == "moea"].groupby(cell + ["family", "method"], as_index = False)[list(metrics)]
+                               .median()
                                .assign(solver = label, config = lambda f: f.method))
     out = pd.concat([AS, MO], ignore_index = True)
     out["rank"] = out.groupby(cell).hv.rank(ascending = False, method = "average")
@@ -405,17 +414,21 @@ def summary(out):
         mo = d[d.method == algo]
         if mo.empty:
             continue
-        print(f"{algo}'s rank among the {n} configurations, per problem and m:")
-        print(mo.pivot(index = "problem", columns = "n_obj", values = "rank")
-                .to_string(float_format = lambda v: f"{v:.0f}"))
         beats = int((mo.set_index(cell)["rank"] < best_as.reindex(mo.set_index(cell).index)).sum())
-        print(f"  ranks 1st in {int((mo['rank'] == 1).sum())} of {len(mo)} cells, and beats every "
-              f"one of the {n_as} AS configurations in {beats}; AS takes the other {len(mo) - beats}")
+        print(f"{algo}: ranks 1st in {int((mo['rank'] == 1).sum())} of {len(mo)} cells, and beats "
+              f"every one of the {n_as} AS configurations in {beats}; AS takes the other "
+              f"{len(mo) - beats}")
         print(f"  mean rank by m: {mo.groupby('n_obj')['rank'].mean().round(2).to_dict()}\n")
 
-    print("median indicator by family and method (igd_norm is the coverage measure to quote):")
-    print(t.groupby(["family", "method"])[["hv", "gd_norm", "igd_norm", "archive"]]
-           .median().round(4).to_string())
+    for metric, (ascending, sense) in REPORTED.items():
+        tab = d.pivot_table(index = "config", columns = "n_obj", values = metric,
+                            aggfunc = "median")
+        levels = list(tab.columns)
+        tab[levels] = tab[levels].round(0 if metric == "archive" else 4)
+        tab["mean rank"] = (d.groupby(cell)[metric].rank(ascending = ascending)
+                             .groupby(d.config).mean().round(2))
+        print(f"median {metric} per objective count, the same {n} configurations ({sense}):")
+        print(tab.sort_values("mean rank").to_string(), "\n")
 
 
 def refs_only():
