@@ -363,13 +363,21 @@ def summary(out):
     """
         The comparison, respecting the seed asymmetry: AS is one draw per (model, solver),
         each MOEA several, so the MOEAs are reduced to a median before anything is compared.
+
+        ALGORITHMS decides which baselines take part.
     """
     import pandas as pd
 
     if not os.path.exists(out):
         raise SystemExit(f"no {out} yet - run the scoring pass first")
-    t = pd.read_csv(out)
-    print(f"{len(t)} runs: {(t.family == 'as').sum()} as, {(t.family == 'moea').sum()} moea\n")
+    full = pd.read_csv(out)
+    t = full[full.family.eq("as") | full.method.isin(ALGORITHMS)]
+    print(f"{len(t)} runs: {(t.family == 'as').sum()} as, {(t.family == 'moea').sum()} moea "
+          f"({', '.join(ALGORITHMS)})")
+    left = sorted(set(full.loc[full.family == "moea", "method"]) - set(ALGORITHMS))
+    if left:
+        print(f"  scored but outside ALGORITHMS, so no part of this comparison: {', '.join(left)}")
+    print()
 
     # the rank view, and the only view: Robust to the reference box in a way raw hv is not
     cell = ["problem", "n_obj"]
@@ -391,27 +399,21 @@ def summary(out):
     tab["all m"] = d.groupby("config")["rank"].mean()
     print(tab.round(2).sort_values("all m").to_string(), "\n")
 
-    # the pair that isolates what adaptive weights buy: every AS configuration and MOEA/D alone
-    pair_rank = ranked(t[t.family.eq("as") | t.method.eq("moead")])
-    n = int(pair_rank.groupby(cell).size().iloc[0])
-    n_as = int(pair_rank[pair_rank.family == "as"].groupby(cell).size().iloc[0])
-    md = pair_rank[pair_rank.method == "moead"]
-    print(f"MOEA/D's rank among {n_as} AS configurations and itself ({n} a cell), per problem and m")
-    print(md.pivot(index = "problem", columns = "n_obj", values = "rank")
-            .to_string(float_format = lambda v: f"{v:.0f}"))
-    first = int((md["rank"] == 1).sum())
-    print(f"  MOEA/D beats all {n_as} AS configurations in {first} of {len(md)} cells; "
-          f"AS takes the other {len(md) - first}")
-    print(f"  mean MOEA/D rank by m: "
-          f"{md.groupby('n_obj')['rank'].mean().round(2).to_dict()}\n")
+    # cell by cell for each baseline: a mean hides a MOEA that either wins the cell or places last
+    best_as = d[d.family == "as"].groupby(cell)["rank"].min()
+    for algo in ALGORITHMS:
+        mo = d[d.method == algo]
+        if mo.empty:
+            continue
+        print(f"{algo}'s rank among the {n} configurations, per problem and m:")
+        print(mo.pivot(index = "problem", columns = "n_obj", values = "rank")
+                .to_string(float_format = lambda v: f"{v:.0f}"))
+        beats = int((mo.set_index(cell)["rank"] < best_as.reindex(mo.set_index(cell).index)).sum())
+        print(f"  ranks 1st in {int((mo['rank'] == 1).sum())} of {len(mo)} cells, and beats every "
+              f"one of the {n_as} AS configurations in {beats}; AS takes the other {len(mo) - beats}")
+        print(f"  mean rank by m: {mo.groupby('n_obj')['rank'].mean().round(2).to_dict()}\n")
 
-    # the load-bearing pair: MOEA/D is fixed-weight decomposition, cas is the adaptive one
-    pair = t.method.isin(["cas", "moead"])
-    print("cas (adaptive scalarisation) against MOEA/D (fixed-weight decomposition):")
-    print(t[pair].groupby(["family", "method"])[["hv", "igd_norm", "gd_norm"]]
-                 .median().round(4).to_string(), "\n")
-
-    print("median by family and method (igd_norm is the coverage measure to quote):")
+    print("median indicator by family and method (igd_norm is the coverage measure to quote):")
     print(t.groupby(["family", "method"])[["hv", "gd_norm", "igd_norm", "archive"]]
            .median().round(4).to_string())
 
