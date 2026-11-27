@@ -61,6 +61,8 @@ N_DIM = 10
 SEEDS = (0, 1, 2, 3, 4)
 # ALGORITHMS = ("moead", "nsga2", "nsga3", "sms")
 ALGORITHMS = ("moead",)
+SOLVERS = ("COBYQA", "SLSQP", "Powell", "COBYLA")          # None = every solver in the csv, or a subset: ("COBYQA", "SLSQP", "Powell")
+SPLIT = ("problem", "n_obj")   # table columns; ("n_obj",) pools the problems into one table
 PARTITIONS = {2: 99, 3: 12, 4: 7, 5: 6}     # das-dennis -> 100, 91, 120, 210 directions
 POP = 100                                   # NSGA-II and SMS-EMOA, which take a size not directions
 WORKERS = 4                                 # --build only; scoring stays in one process
@@ -368,6 +370,23 @@ def ranked(t, metrics = REPORTED):
     return out
 
 
+def spread(d, values, aggfunc, summary, decimals, caption):
+    """
+        Configurations down, SPLIT[-1] across: first pooled over every problem, then one table per
+        group of SPLIT[:-1]. `summary` is called on each table's OWN rows, so its column summarises
+        that table and not the whole grid - the pooled table is where the grid-wide figure lives.
+    """
+    across, deep = SPLIT[-1], len(SPLIT) > 1
+    parts = [("all problems" if deep else "", d)] + (list(d.groupby(SPLIT[0])) if deep else [])
+    for key, part in parts:
+        tab = part.pivot_table(index = "config", columns = across, values = values,
+                               aggfunc = aggfunc).round(decimals)
+        s = summary(part)
+        tab[s.name] = s
+        print(f"{caption}{' - ' + key if key else ''}:")
+        print(tab.sort_values(s.name).to_string(), "\n")
+
+
 def summary(out):
     """
         The comparison, respecting the seed asymmetry: AS is one draw per (model, solver),
@@ -380,12 +399,15 @@ def summary(out):
     if not os.path.exists(out):
         raise SystemExit(f"no {out} yet - run the scoring pass first")
     full = pd.read_csv(out)
-    t = full[full.family.eq("as") | full.method.isin(ALGORITHMS)]
+    t = full[(full.family.eq("as") & (full.solver.isin(SOLVERS) if SOLVERS else True))
+             | full.method.isin(ALGORITHMS)]
     print(f"{len(t)} runs: {(t.family == 'as').sum()} as, {(t.family == 'moea').sum()} moea "
           f"({', '.join(ALGORITHMS)})")
     left = sorted(set(full.loc[full.family == "moea", "method"]) - set(ALGORITHMS))
+    left += sorted(set(full.loc[full.family == "as", "solver"]) - set(SOLVERS or ())) if SOLVERS else []
     if left:
-        print(f"  scored but outside ALGORITHMS, so no part of this comparison: {', '.join(left)}")
+        print(f"  scored but outside ALGORITHMS / SOLVERS, so no part of this comparison: "
+              f"{', '.join(left)}")
     print()
 
     # the rank view, and the only view: Robust to the reference box in a way raw hv is not
@@ -395,18 +417,14 @@ def summary(out):
     n, n_as = int(sizes.iloc[0]), int(d[d.family == "as"].groupby(cell).size().iloc[0])
     print(f"RANK within each cell: {n} configurations - {n_as} AS (model, solver) pairs and "
           f"{n - n_as} MOEA medians; chance rank {(n + 1) / 2:.1f}")
-    if sizes.nunique() > 1:
+    if sizes.nunique() > 1: # validate if the grid does not share the same number of candidates
         print(f"  WARNING cells hold {sizes.min()}-{sizes.max()} configurations, so the ranks "
               f"are not on one scale and the chance rank is only indicative")
-    r = d.groupby("config")["rank"].agg(["mean", "median"]).round(2).sort_values("mean")
-    r["ranks_1st"] = (d[d["rank"] == 1].config.value_counts()
-                       .reindex(r.index, fill_value = 0).astype(int))
-    print(r.to_string(), "\n")
+    print()
 
-    print(f"mean rank by objective count, the same {n} configurations:")
-    tab = d.pivot_table(index = "config", columns = "n_obj", values = "rank", aggfunc = "mean")
-    tab["all m"] = d.groupby("config")["rank"].mean()
-    print(tab.round(2).sort_values("all m").to_string(), "\n")
+    spread(d, "rank", "mean",
+           lambda p: p.groupby("config")["rank"].mean().round(2).rename("mean rank"),
+           2, f"mean rank by {SPLIT[-1]}, the same {n} configurations")
 
     # cell by cell for each baseline: a mean hides a MOEA that either wins the cell or places last
     best_as = d[d.family == "as"].groupby(cell)["rank"].min()
@@ -421,14 +439,11 @@ def summary(out):
         print(f"  mean rank by m: {mo.groupby('n_obj')['rank'].mean().round(2).to_dict()}\n")
 
     for metric, (ascending, sense) in REPORTED.items():
-        tab = d.pivot_table(index = "config", columns = "n_obj", values = metric,
-                            aggfunc = "median")
-        levels = list(tab.columns)
-        tab[levels] = tab[levels].round(0 if metric == "archive" else 4)
-        tab["mean rank"] = (d.groupby(cell)[metric].rank(ascending = ascending)
-                             .groupby(d.config).mean().round(2))
-        print(f"median {metric} per objective count, the same {n} configurations ({sense}):")
-        print(tab.sort_values("mean rank").to_string(), "\n")
+        spread(d, metric, "median",
+               lambda p, a = ascending, k = metric: (p.groupby(cell)[k].rank(ascending = a)
+                   .groupby(p.config).mean().round(2).rename("mean rank")),
+               0 if metric == "archive" else 4,
+               f"median {metric} per {SPLIT[-1]}, the same {n} configurations ({sense})")
 
 
 def refs_only():
